@@ -1,0 +1,42 @@
+//@version=6
+indicator("Symbol and Nifty Information", overlay=true)
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.symbol(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+// Get symbol information
+symInfo = request.security(symbolInput, timeframe.period, close)
+
+// ==========================================
+// Nifty Section
+// ==========================================
+// Strike Price Settings
+strikePrice = input.float(defval=19500.0, title="Nifty Strike Price", step=50.0, group="Nifty")
+strikeInterval = input.float(defval=50.0, title="Strike Interval", step=50.0, group="Nifty")
+// Expiration Date Settings
+expDay = input.int(defval=30, title="Expiration Day", minval=1, maxval=31, group="Nifty")
+expMonth = input.int(defval=1, title="Expiration Month", minval=1, maxval=12, group="Nifty")
+expYear = input.int(defval=2025, title="Expiration Year", minval=2024, group="Nifty")
+
+// Get OHLCV data
+symbolOpen = request.security(symbolInput, timeframe.period, open)
+symbolHigh = request.security(symbolInput, timeframe.period, high)
+symbolLow = request.security(symbolInput, timeframe.period, low)
+symbolClose = request.security(symbolInput, timeframe.period, close)
+symbolVolume = request.security(symbolInput, timeframe.period, volume)
+
+// Display OHLCV values on the chart
+var table infoTable = table.new(position.top_right, 6, 2, bgcolor=color.new(color.black, 70))
+table.cell(infoTable, 0, 0, "Symbol", text_color=color.white)
+table.cell(infoTable, 0, 1, symbolInput, text_color=color.white)
+table.cell(infoTable, 1, 0, "Open", text_color=color.white)
+table.cell(infoTable, 1, 1, str.tostring(symbolOpen), text_color=color.white)
+table.cell(infoTable, 2, 0, "High", text_color=color.white)
+table.cell(infoTable, 2, 1, str.tostring(symbolHigh), text_color=color.white)
+table.cell(infoTable, 3, 0, "Low", text_color=color.white)
+table.cell(infoTable, 3, 1, str.tostring(symbolLow), text_color=color.white)
+table.cell(infoTable, 4, 0, "Close", text_color=color.white)
+table.cell(infoTable, 4, 1, str.tostring(symbolClose), text_color=color.white)
+table.cell(infoTable, 5, 0, "Volume", text_color=color.white)
+table.cell(infoTable, 5, 1, str.tostring(symbolVolume), text_color=color.white)

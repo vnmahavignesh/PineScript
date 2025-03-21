@@ -1,0 +1,672 @@
+//@version=6
+indicator("Pivot Levels Indicator", overlay=true)
+
+// ==========================================
+// Inputs
+// ==========================================
+// Symbol Selection
+symInput = input.string("NIFTY", "Trading Symbol (e.g., NIFTY, RELIANCE, TCS)", group="General Settings", tooltip="Enter the trading symbol for the instrument you want to analyze.")
+
+// Convert the input to uppercase
+symbolInput = str.upper(symInput)
+
+// Strike Price and Levels
+strikePrice = input.float(22700, "Strike Price", group="Strike Settings", inline="STRIKE")
+strikeInterval = input.float(50, "Interval", group="Strike Settings", inline="STRIKE")
+numLevels = input.int(7, "Levels", minval=1, maxval=10, group="Strike Settings", inline="STRIKE")
+
+// Expiration Date
+expDay = input.int(27, "ExpDay", group="Expiration Settings", inline="EXP")
+expMonth = input.int(02, "ExpMonth", group="Expiration Settings", inline="EXP")
+expYear = input.int(25, "ExpYear", group="Expiration Settings", inline="EXP")
+
+// Function to add leading zero
+addLeadingZero(value) =>
+    str.tostring(value < 10 ? "0" + str.tostring(value) : str.tostring(value))
+
+// Format expiration date components with leading zeros
+formattedExpDay = addLeadingZero(expDay)
+formattedExpMonth = addLeadingZero(expMonth)
+formattedExpYear = addLeadingZero(expYear)
+
+// Display Options
+showTable = input.bool(true, "TB", group="Display Options", inline="DO")
+showAdjustedStrikePrices = input.bool(false, "GN", group="Display Options", inline="DO")
+showSupportResistance = input.bool(false, "U.IDX", group="Display Options", inline="DO")
+showSupportResistanceLevels = input.bool(false, title="A.IDX", group="Display Options", inline="DO")
+showAvgCloseLevels = input.bool(false, "STL", group="Display Options", inline="DO")
+dynamicAvgCloseLevels = input.bool(false, "DYL", group="Display Options", inline="DO")
+plotCePeSumAtm = input.bool(false, "CPL", group="Display Options", inline="DO")
+showOHLC = input.bool(title="OHLC", defval=true, group="Display Options", inline="DO")
+dynamicSignal = input.bool(false, title="Dsig", group="Display Options", inline="DO")
+
+displayMode = input.string("Hide All Levels", "Display Mode", 
+     options=["CE Only", "PE Only", "Hide All Levels", "Show All Levels"], 
+     group="Display Options")
+
+labelSize = input.string("Normal", "Label Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add table font size option
+tableFontSize = input.string("Normal", "Table Font Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add this to the "Display Options" input group
+tablePosition = input.string("Top Right", "Table Position", 
+     options=["Top Left", "Top Right", "Top Center", "Bottom Left", "Bottom Right", "Bottom Center", "Middle Left", "Middle Right", "Middle Center"], 
+     group="Display Options")
+
+maxTableRows = input.int(10, "Max Table Rows", minval=1, maxval=50, group="Display Options")
+
+// ==========================================
+// Functions
+// ==========================================
+
+// Function to get data with proper error handling 
+getdata(instrument, tf) =>
+    [rOpen, rClose, rVolume, prhigh, prlow] = request.security(instrument, timeframe=tf, expression=[open, close[1], volume, high[1], low[1]], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+[todayDayOpen, prevDayHigh, prevDayLow, prevDayClose] = request.security(syminfo.tickerid, "D", [open, high[1], low[1], close[1]])
+[symbolOpen, livePrice] = request.security(symbolInput, "D", expression=[open, close])
+
+// Function to sort indices based on volume
+sortIndicesByVolume(volumes) =>
+    indices = array.new_int(array.size(volumes))
+    for i = 0 to array.size(indices) - 1
+        array.set(indices, i, i)
+    
+    // Bubble sort indices based on volumes
+    for i = 0 to array.size(indices) - 2
+        for j = 0 to array.size(indices) - 2 - i
+            if array.get(volumes, array.get(indices, j)) < array.get(volumes, array.get(indices, j + 1))
+                temp = array.get(indices, j)
+                array.set(indices, j, array.get(indices, j + 1))
+                array.set(indices, j + 1, temp)
+    indices
+
+// Function to convert label size string to size enum
+getLabelSize(size) =>
+    switch size
+        "Auto" => size.auto
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to convert table font size string to size enum
+getTableFontSize(size) =>
+    switch size
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to get table position
+getTablePosition(pos) =>
+    switch pos
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Top Center" => position.top_center
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Center" => position.bottom_center
+        "Middle Left" => position.middle_left
+        "Middle Right" => position.middle_right
+        "Middle Center" => position.middle_center
+
+// ==========================================
+// Main Logic
+// ==========================================
+
+// Initialize arrays for symbols and data
+var string[] CEsymbols = array.new_string(numLevels * 2 + 1)
+var string[] PEsymbols = array.new_string(numLevels * 2 + 1)
+var float[] strikes = array.new_float(numLevels * 2 + 1)
+
+// Combined arrays for CE and PE data
+var float[] combinedStrikes = array.new_float((numLevels * 2 + 1) * 2)
+var float[] combinedOpens = array.new_float((numLevels * 2 + 1) * 2)
+var float[] combinedCloses = array.new_float((numLevels * 2 + 1) * 2)
+var float[] combinedVolumes = array.new_float((numLevels * 2 + 1) * 2)
+var bool[] isCE = array.new_bool((numLevels * 2 + 1) * 2)
+var string[] combinedSymbols = array.new_string((numLevels * 2 + 1) * 2)
+var float[] combinedPrHighs = array.new_float((numLevels * 2 + 1) * 2)
+var float[] combinedPrLows = array.new_float((numLevels * 2 + 1) * 2)
+
+// Store previous day's bar index
+var int prevDayIndex = na
+
+// Update previous day's index when a new day starts
+if dayofweek != dayofweek[1]
+    prevDayIndex := bar_index[1]
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to numLevels * 2
+        strike = strikePrice + (strikeInterval * (i - numLevels))
+        array.set(strikes, i, strike)
+        
+        ceSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strike)
+        peSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strike)
+        
+        array.set(CEsymbols, i, ceSymbol)
+        array.set(PEsymbols, i, peSymbol)
+
+// Fetch and combine CE and PE data
+for i = 0 to numLevels * 2
+    [ceOpen, ceClose, ceVolume, cePrhigh, cePrLow] = getdata(array.get(CEsymbols, i), "D")
+    [peOpen, peClose, peVolume, pePrhigh, pePrLow] = getdata(array.get(PEsymbols, i), "D")
+    
+    // Store CE data
+    array.set(combinedStrikes, i, array.get(strikes, i))
+    array.set(combinedOpens, i, ceOpen)
+    array.set(combinedCloses, i, ceClose)
+    array.set(combinedVolumes, i, ceVolume)
+    array.set(isCE, i, true)
+    array.set(combinedSymbols, i, array.get(CEsymbols, i))
+    array.set(combinedPrHighs, i, cePrhigh)
+    array.set(combinedPrLows, i, cePrLow)
+
+    // Store PE data
+    array.set(combinedStrikes, i + numLevels * 2 + 1, array.get(strikes, i))
+    array.set(combinedOpens, i + numLevels * 2 + 1, peOpen)
+    array.set(combinedCloses, i + numLevels * 2 + 1, peClose)
+    array.set(combinedVolumes, i + numLevels * 2 + 1, peVolume)
+    array.set(isCE, i + numLevels * 2 + 1, false)
+    array.set(combinedSymbols, i + numLevels * 2 + 1, array.get(PEsymbols, i))
+    array.set(combinedPrHighs, i + numLevels * 2 + 1, pePrhigh)
+    array.set(combinedPrLows, i + numLevels * 2 + 1, pePrLow)
+
+// Sort indices by volume
+var int[] sortedIdx = array.new_int(array.size(combinedVolumes))
+if barstate.islast
+    sortedIdx := sortIndicesByVolume(combinedVolumes)
+
+// Fetch the 1st CE and PE strike prices
+var float firstCEStrike = na
+var float firstPEStrike = na
+
+if barstate.islast
+    for i = 0 to array.size(sortedIdx) - 1
+        idx = array.get(sortedIdx, i)
+        strike = array.get(combinedStrikes, idx)
+        
+        if strike % strikeInterval == 0
+            if array.get(isCE, idx) and na(firstCEStrike)
+                firstCEStrike := strike
+            else if not array.get(isCE, idx) and na(firstPEStrike)
+                firstPEStrike := strike
+        else            
+            if array.get(isCE, idx) and na(firstCEStrike)
+                firstCEStrike := strike
+            else if not array.get(isCE, idx) and na(firstPEStrike)
+                firstPEStrike := strike
+        
+        // Break the loop if both CE and PE strikes are found
+        if not na(firstCEStrike) and not na(firstPEStrike)
+            break
+
+// Calculate the Average of the strike prices
+var float srStrikePrice = na
+if not na(firstCEStrike) and not na(firstPEStrike)
+    srStrikePrice := (firstCEStrike + firstPEStrike) / 2
+
+    // Check if srStrikePrice obeys the strikeInterval
+    if srStrikePrice % strikeInterval != 0
+        srStrikePrice := na // Set to na if it doesn't obey the interval
+
+// Display the result
+var string resultText = na
+if not na(srStrikePrice)
+    resultText := str.tostring(srStrikePrice)
+else
+    resultText := "Do Manual"
+
+// // Fetch live price of Nifty
+// livePrice = request.security(symbolInput, timeframe.period, close)
+
+// Calculate Volume Percentage
+var float[] volumePercentages = array.new_float(array.size(combinedVolumes))
+for i = 0 to array.size(combinedVolumes) - 1
+    currentVolume = array.get(combinedVolumes, i)
+    previousVolume = i > 0 ? array.get(combinedVolumes, i - 1) : na
+    if not na(previousVolume) and previousVolume != 0
+        array.set(volumePercentages, i, ((currentVolume - previousVolume) / previousVolume) * 100)
+
+// Get the font size for the table
+var tableCellsTextSize = getTableFontSize(tableFontSize)
+    
+// Then, in the table creation and population section:
+if barstate.islast and showTable
+    var table sortedTable = table.new(getTablePosition(tablePosition), 8, maxTableRows + 2, bgcolor=color.white, border_width=1, frame_color=color.black, frame_width=1, border_color=color.black)
+    
+    // Add live price of Nifty as the first row
+    bgColorLivePrice = livePrice > symbolOpen ? color.green : color.red
+    table.cell(sortedTable, 0, 0, "LTP", bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 1, 0, symbolInput, bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 2, 0, str.tostring(livePrice), bgcolor=bgColorLivePrice, text_color=color.white, text_size=tableCellsTextSize)
+    table.cell(sortedTable, 3, 0, str.tostring(symbolOpen), bgcolor=color.new(#207ac4, 44),text_color=color.white, text_size=tableCellsTextSize)
+    table.cell(sortedTable, 4, 0, "TRADE", bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 5, 0, str.tostring(resultText), bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+    // table.cell(sortedTable, 6, 0, "", bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+    // table.cell(sortedTable, 7, 0, "", bgcolor=color.new(color.blue, 90), text_size=tableCellsTextSize)
+
+    // Table headers with specified font size
+    table.cell(sortedTable, 0, 1, "No", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 1, 1, "STRIKE", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 2, 1, "SYM", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)     
+    table.cell(sortedTable, 3, 1, "ACC", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 4, 1, "DIS", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    table.cell(sortedTable, 5, 1, "ROC", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    // table.cell(sortedTable, 6, 1, "Open", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+    // table.cell(sortedTable, 7, 1, "Close", bgcolor=color.new(color.gray, 70), text_size=tableCellsTextSize)
+        
+    // Fill table with sorted data, limiting to maxTableRows
+    for i = 0 to math.min(maxTableRows - 1, array.size(sortedIdx) - 1)
+        idx = array.get(sortedIdx, i)
+        bgColor = array.get(isCE, idx) ? color.new(#70f874, 10) : color.new(color.red, 90)   // Light green for CE, light red for PE
+        type = array.get(isCE, idx) ? "CE" : "PE"
+        txtColor = color.black  // Light green for CE, light red for PE 
+        txtColorVolPct = color.white
+        // Calculate percentage change in volume
+        openVolume = array.get(combinedOpens, idx)
+        currentVolume = array.get(combinedVolumes, idx)
+        volumeDisplay = str.tostring(currentVolume / 1000000, "#.##")  // Divide by 1,000,000 and format to 2 decimal places   
+
+        // Volume Percentage 
+        volPct = array.get(volumePercentages, idx)
+        volPctBgColor = na(volPct) ? color.new(color.gray, 90) : (volPct > 0 ? color.green : color.red)
+        volPctDisplay = na(volPct) ? "-" : str.tostring(volPct, "#.##") //+ "%"
+    
+        // Calculate ROC for volume         
+        prevVolume = array.get(combinedVolumes, idx)[1]
+        roc = na(prevVolume) or prevVolume == 0 ? na : ((currentVolume - prevVolume) / prevVolume) * 100
+        
+        // Calculate previous ROC
+        prevRoc = nz(roc[1], 0)  // Use nz to handle na values
+
+        // Determine ROC cell background color
+        rocBgColor = na(roc) ? color.new(color.gray, 90) : (roc > prevRoc ? color.new(color.green, 90) : color.new(color.red, 90))
+
+        // Display ROC value or placeholder
+        rocDisplay = na(roc) ? "-" : str.tostring(roc, "#.##") + "%"
+    
+        table.cell(sortedTable, 0, i + 2, str.tostring(i + 1), bgcolor=bgColor, text_size=tableCellsTextSize, text_color=txtColor)
+        table.cell(sortedTable, 1, i + 2, str.tostring(array.get(combinedStrikes, idx)), bgcolor=bgColor, text_size=tableCellsTextSize, text_color=txtColor)
+        table.cell(sortedTable, 2, i + 2, type, bgcolor=bgColor, text_size=tableCellsTextSize, text_color=txtColor)        
+        table.cell(sortedTable, 3, i + 2, volumeDisplay, bgcolor=color.rgb(243, 145, 33, 68), text_size=tableCellsTextSize, text_color=txtColor)
+        table.cell(sortedTable, 4, i + 2, volPctDisplay, bgcolor=volPctBgColor, text_size=tableCellsTextSize, text_color=txtColorVolPct) 
+        table.cell(sortedTable, 5, i + 2, rocDisplay, bgcolor=rocBgColor, text_size=tableCellsTextSize, text_color=txtColor)  
+        // table.cell(sortedTable, 6, i + 2, str.tostring(array.get(combinedOpens, idx)), bgcolor=bgColor, text_size=tableCellsTextSize, text_color=txtColor)
+        // table.cell(sortedTable, 7, i + 2, str.tostring(array.get(combinedCloses, idx)), bgcolor=bgColor, text_size=tableCellsTextSize, text_color=txtColor)
+
+// Draw horizontal lines and labels for option chart
+for i = 0 to array.size(sortedIdx) - 1
+    idx = array.get(sortedIdx, i)
+    strike = array.get(combinedStrikes, idx)
+    closePrice = array.get(combinedCloses, idx)
+    isCe = array.get(isCE, idx)    
+    
+    // Skip if openPrice is NaN
+    if not na(closePrice) and not na(prevDayIndex)
+        // Determine if line should be drawn based on display mode
+        drawLine = switch displayMode
+            "CE Only" => isCe
+            "PE Only" => not isCe
+            "Hide All Levels" => false
+            "Show All Levels" => true
+        
+        if drawLine
+            lineColor = isCe ? color.green : color.red
+            labelColor = isCe ? color.green : color.red
+            
+            // Draw horizontal line from open price
+            line.new(prevDayIndex, closePrice, bar_index, closePrice, color=lineColor, width=1, extend=extend.right)
+            
+            // Label the strike price with user-selected size
+            label.new(prevDayIndex, closePrice, str.tostring(strike), color=labelColor, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+
+// Draw horizontal lines and labels for gift nifty logic
+if showAdjustedStrikePrices
+    for i = 0 to array.size(sortedIdx) - 1
+        idx = array.get(sortedIdx, i)
+        strike = array.get(combinedStrikes, idx)
+        closePrice = array.get(combinedCloses, idx)
+        isCe = array.get(isCE, idx)        
+
+        // Skip if closePrice is NaN
+        if not na(closePrice)
+            if isCe
+                ceAdjustedStrikePrice = strike - closePrice
+                // Draw horizontal line for CE adjusted strike price
+                line.new(prevDayIndex, ceAdjustedStrikePrice, bar_index, ceAdjustedStrikePrice, color=color.green, width=1, extend=extend.right)
+                // Label the CE adjusted strike price
+                label.new(prevDayIndex, ceAdjustedStrikePrice, text=str.trim(str.tostring(strike)), color=color.green, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+            else
+                peAdjustedStrikePrice = strike + closePrice
+                // Draw horizontal line for PE adjusted strike price
+                line.new(prevDayIndex, peAdjustedStrikePrice, bar_index, peAdjustedStrikePrice, color=color.red, width=1, extend=extend.right)
+                // Label the PE adjusted strike price
+                label.new(prevDayIndex, peAdjustedStrikePrice, text=str.trim(str.tostring(strike)), color=color.red, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+        
+// Function to draw a single support/resistance level with label
+drawLevel(price, color, name, start, stylePos, widthNum) =>
+    if not na(price)
+        line.new(x1=prevDayIndex, y1=price, x2=bar_index, y2=price, color=color, width=widthNum, extend=extend.right)
+        label.new(x=start, y=price, text=name, color=color, textcolor=color.white, style=stylePos, size=getLabelSize(labelSize))
+        
+// Calculate the CE and PE close prices for srStrikePrice -Automatic 
+var float ceCloseAtSrStrike = na
+var float peCloseAtSrStrike = na
+
+if not na(srStrikePrice)
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == srStrikePrice
+            if array.get(isCE, i)
+                ceCloseAtSrStrike := array.get(combinedCloses, i)
+            else
+                peCloseAtSrStrike := array.get(combinedCloses, i)
+
+// Calculate support and resistance levels for index - Automatic strike price
+var float minor_support_new = na
+var float minor_resistance_new = na
+var float major_support_new = na
+var float major_resistance_new = na
+
+if not na(srStrikePrice) and not na(ceCloseAtSrStrike) and not na(peCloseAtSrStrike)
+    minor_support_new := srStrikePrice - peCloseAtSrStrike
+    minor_resistance_new := srStrikePrice + ceCloseAtSrStrike
+    major_support_new := srStrikePrice - (ceCloseAtSrStrike + peCloseAtSrStrike)
+    major_resistance_new := srStrikePrice + (ceCloseAtSrStrike + peCloseAtSrStrike)
+
+// Draw support and resistance lines and labels (only if checkbox is enabled) - Automatic strike price 
+if showSupportResistanceLevels
+    drawLevel(minor_support_new, color.purple, "S1", bar_index + 40, label.style_label_left, 2)
+    drawLevel(minor_resistance_new, color.purple, "R1", bar_index + 40, label.style_label_left, 2)
+    drawLevel(major_support_new, color.purple, "S2", bar_index + 40, label.style_label_left, 2)
+    drawLevel(major_resistance_new, color.purple, "R2", bar_index + 40, label.style_label_left, 2)
+    
+// Calculate the CE and PE close prices for srStrikePrice -Automatic 
+var float ceCloseAtstrikePrice = na
+var float peCloseAtstrikePrice = na
+
+if not na(strikePrice)
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice
+            if array.get(isCE, i)
+                ceCloseAtstrikePrice := array.get(combinedCloses, i)
+            else
+                peCloseAtstrikePrice := array.get(combinedCloses, i)
+
+// Calculate support and resistance levels for index - Automatic strike price
+var float minor_support_strikePrice = na
+var float minor_resistance_strikePrice = na
+var float major_support_strikePrice = na
+var float major_resistance_strikePrice = na
+
+if not na(strikePrice) and not na(ceCloseAtstrikePrice) and not na(peCloseAtstrikePrice)
+    minor_support_strikePrice := strikePrice - peCloseAtstrikePrice
+    minor_resistance_strikePrice := strikePrice + ceCloseAtstrikePrice
+    major_support_strikePrice := strikePrice - (ceCloseAtstrikePrice + peCloseAtstrikePrice)
+    major_resistance_strikePrice := strikePrice + (ceCloseAtstrikePrice + peCloseAtstrikePrice)
+
+// Draw support and resistance lines and labels (only if checkbox is enabled) - Automatic strike price 
+if showSupportResistance
+    if not na(minor_support_new)
+        line.new(x1=prevDayIndex, y1=minor_support_strikePrice, x2=bar_index, y2=minor_support_strikePrice, color=color.black, width=2, extend=extend.right)
+        label.new(x=bar_index + 40, y=minor_support_strikePrice, text="S1", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+    if not na(minor_resistance_new)
+        line.new(x1=prevDayIndex, y1=minor_resistance_strikePrice, x2=bar_index, y2=minor_resistance_strikePrice, color=color.black, width=2, extend=extend.right)
+        label.new(x=bar_index + 40, y=minor_resistance_strikePrice, text="R1", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+    if not na(major_support_new)
+        line.new(x1=prevDayIndex, y1=major_support_strikePrice, x2=bar_index, y2=major_support_strikePrice, color=color.black, width=2, extend=extend.right)
+        label.new(x=bar_index + 40, y=major_support_strikePrice, text="S2", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+    
+    if not na(major_resistance_new)
+        line.new(x1=prevDayIndex, y1=major_resistance_strikePrice, x2=bar_index, y2=major_resistance_strikePrice, color=color.black, width=2, extend=extend.right)
+        label.new(x=bar_index + 40, y=major_resistance_strikePrice, text="R2", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+//------------------------------Static Line code starts---------------------------------------------------------------
+// Calculate and draw the sum of CE close and PE close for the user-specified strike price
+var float avgCloseATM = na // Make avgCloseATM available globally
+var float avgCloseITM = na // Make avgCloseITM available globally
+var float avgCloseOTM = na // Make avgCloseOTM available globally
+
+if barstate.islast
+    // Find the correct index for the specified strike price
+    targetIndex = -1
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice
+            targetIndex := i
+            break
+    
+    // If a matching strike price is found
+    if targetIndex != -1
+        // Determine the corresponding CE and PE indices
+        ceIndex = targetIndex < numLevels * 2 + 1 ? targetIndex : targetIndex - (numLevels * 2 + 1)
+        peIndex = targetIndex < numLevels * 2 + 1 ? targetIndex + (numLevels * 2 + 1) : targetIndex
+        
+        ceClose = array.get(combinedCloses, ceIndex)
+        peClose = array.get(combinedCloses, peIndex)            
+
+        if not na(ceClose) and not na(peClose)
+            avgCloseATM := (ceClose + peClose) / 2      
+            
+// Calculate the sum of CE previous day close of below 2nd level and PE previous day close of above 2nd level for user-defined strike price
+if barstate.islast
+    // Find the indices for the 2nd level below and above the user-defined strike price
+    ceBelow2ndLevelIndex = -1
+    peAbove2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and array.get(isCE, i)
+            ceBelow2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and not array.get(isCE, i)
+            peAbove2ndLevelIndex := i
+    
+    // If both indices are found
+    if ceBelow2ndLevelIndex != -1 and peAbove2ndLevelIndex != -1
+        ceCloseBelow2ndLevel = array.get(combinedCloses, ceBelow2ndLevelIndex)
+        peCloseAbove2ndLevel = array.get(combinedCloses, peAbove2ndLevelIndex)
+        
+        if not na(ceCloseBelow2ndLevel) and not na(peCloseAbove2ndLevel)
+            avgCloseITM := (ceCloseBelow2ndLevel + peCloseAbove2ndLevel) / 2
+            
+// Calculate the sum of CE previous day close of above 2nd level and PE previous day close of below 2nd level for user-defined strike price
+if barstate.islast
+    // Find the indices for the 2nd level below and above the user-defined strike price
+    ceAbove2ndLevelIndex = -1
+    peBelow2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and array.get(isCE, i)
+            ceAbove2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and not array.get(isCE, i)
+            peBelow2ndLevelIndex := i
+    
+    // If both indices are found
+    if ceAbove2ndLevelIndex != -1 and peBelow2ndLevelIndex != -1
+        ceCloseAbove2ndLevel = array.get(combinedCloses, ceAbove2ndLevelIndex)
+        peCloseBelow2ndLevel = array.get(combinedCloses, peBelow2ndLevelIndex)
+        
+        if not na(ceCloseAbove2ndLevel) and not na(peCloseBelow2ndLevel)
+            avgCloseOTM := (ceCloseAbove2ndLevel + peCloseBelow2ndLevel) / 2
+
+if showAvgCloseLevels            
+    drawLevel(avgCloseATM, color.olive, str.trim("MIDDLE"), prevDayIndex, label.style_label_right, 1)
+    drawLevel(avgCloseITM, color.purple, str.trim("UPPER"), prevDayIndex, label.style_label_right, 1)
+    drawLevel(avgCloseOTM, color.orange, str.trim("Lower"), prevDayIndex, label.style_label_right, 1)
+//------------------------------Static Line code ends---------------------------------------------------------------
+
+//------------------------------------------------Start Dynamic code--------------------------------------
+// Initialize arrays to store 1m close prices
+var float[] ce1mCloses = array.new_float(0)
+var float[] pe1mCloses = array.new_float(0)
+
+// Initialize variables to store strike prices
+var float strikePriceAtm = na
+var float strikePriceAbove = na
+var float strikePriceBelow = na
+
+// Variables to store the sums and averages
+var float cePeSumAtm = na
+var float dynamicAvgATM = na
+var float dynamicAvgOTM = na
+var float dynamicAvgITM = na
+
+// Fetch and store 1m close prices for the user-defined strike price and its 2nd levels
+if barstate.isconfirmed
+    // Store strike prices in separate variables
+    strikePriceAtm := strikePrice
+    strikePriceAbove := strikePrice + 2 * strikeInterval
+    strikePriceBelow := strikePrice - 2 * strikeInterval
+
+    // Fetch and store for the user-defined strike price (ATM)
+    ce1mCloseAtm = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strikePriceAtm), "1", close)
+    pe1mCloseAtm = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strikePriceAtm), "1", close)
+    array.push(ce1mCloses, ce1mCloseAtm)
+    array.push(pe1mCloses, pe1mCloseAtm)
+
+    // Intrinsic Value Calculations
+    ce_intrinsic_value = math.max(livePrice - strikePriceAtm, 0) // Call Option Intrinsic Value
+    pe_intrinsic_value = math.max(strikePriceAtm - livePrice, 0) // Put Option Intrinsic Value
+
+    // Extrinsic Value Calculations
+    ce_extrinsic_value = ce1mCloseAtm - ce_intrinsic_value
+    pe_extrinsic_value = pe1mCloseAtm - pe_intrinsic_value
+
+    // Calculate the sum of CE and PE closes for the ATM strike price
+    cePeSumAtm := ce_extrinsic_value + pe_extrinsic_value
+
+    // Calculate the average of CE and PE closes for the ATM strike price
+    dynamicAvgATM := (ce1mCloseAtm + pe1mCloseAtm) / 2
+
+    // Fetch and store for the 2nd level above the strike price (CE)
+    ce1mCloseAbove = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strikePriceAbove), "1", close)
+    array.push(ce1mCloses, ce1mCloseAbove)
+
+    // Fetch and store for the 2nd level below the strike price (PE)
+    pe1mCloseBelow = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strikePriceBelow), "1", close)
+    array.push(pe1mCloses, pe1mCloseBelow)
+
+    // Calculate the average of CE closes (2nd level above) and PE closes (2nd level below)
+    dynamicAvgOTM := (ce1mCloseAbove + pe1mCloseBelow) / 2
+
+    // Fetch and store for the 2nd level below the strike price (CE)
+    ce1mCloseBelow = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strikePriceBelow), "1", close)
+    array.push(ce1mCloses, ce1mCloseBelow)
+
+    // Fetch and store for the 2nd level above the strike price (PE)
+    pe1mCloseAbove = request.security(symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strikePriceAbove), "1", close)
+    array.push(pe1mCloses, pe1mCloseAbove)
+
+    // Calculate the average of CE closes (2nd level below) and PE closes (2nd level above)
+    dynamicAvgITM := (ce1mCloseBelow + pe1mCloseAbove) / 2
+
+// Plot the sum of CE and PE closes for the ATM strike price
+plot(plotCePeSumAtm ? cePeSumAtm : na, title="Magic DYML", color=color.blue, linewidth=2)
+
+// Plot the average of CE closes (2nd level below) and PE closes (2nd level above)
+plot(dynamicAvgCloseLevels ? dynamicAvgITM : na, title="MGL-Upper", color=color.red, linewidth=2)
+
+// Plot the average of CE and PE closes for the ATM strike price
+plot(dynamicAvgCloseLevels ? dynamicAvgATM : na, title="MGL-Middle", color=color.orange, linewidth=2)
+
+// Plot the average of CE closes (2nd level above) and PE closes (2nd level below)
+plot(dynamicAvgCloseLevels ? dynamicAvgOTM : na, title="MGL-Lower", color=color.green, linewidth=2)
+//------------------------------End of dynamic code----------------------------------------------------------------
+
+//------------------------------Dynamic signal start---------------------------------------------------------------
+
+// Calculate buy conditions (for OTM line) and sell conditions (for ITM line)
+dynamicBuyOTM = ta.crossover(close, dynamicAvgOTM) or (low <= dynamicAvgOTM and close > dynamicAvgOTM)
+dynamicSellITM = ta.crossunder(close, dynamicAvgITM) or (high >= dynamicAvgITM and close < dynamicAvgITM)
+
+// Add similar buy and sell conditions for ATM line
+dynamicBuyATM = ta.crossover(close, dynamicAvgATM) or (low <= dynamicAvgATM and close > dynamicAvgATM)
+dynamicSellATM = ta.crossunder(close, dynamicAvgATM) or (high >= dynamicAvgATM and close < dynamicAvgATM)
+
+// Plot buy signals with green arrows below the candle (if checkbox is enabled)
+plotshape(dynamicSignal ? dynamicBuyOTM : false, title="Buy DYL", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+// plotshape(dynamicSignal ? dynamicBuyATM : false, title="Buy ADYL", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+
+// Plot sell signals with red arrows above the candle (if checkbox is enabled)
+plotshape(dynamicSignal ? dynamicSellITM : false, title="Sell DYL", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
+// plotshape(dynamicSignal ? dynamicSellATM : false, title="Sell ADYL", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
+
+//----------------------------------------------Dynamic signal End--------------------------------------------------
+// ---------------------------------------------Drawing the OHLC Line Starts----------------------------------------
+// Declare line and label variables
+var line openLine = na
+var line highLine = na
+var line lowLine = na
+var line closeLine = na
+var label openLabel = na
+var label highLabel = na
+var label lowLabel = na
+var label closeLabel = na
+
+// Function to create and manage lines
+create_line(float price, color lineColor, bool showOHLC, int width, string lineStyle) =>
+    line line_ref = na
+    if (not na(price) and showOHLC)
+        lineStyleEnum = lineStyle == "solid" ? line.style_solid : lineStyle == "dotted" ? line.style_dotted : lineStyle == "dashed" ? line.style_dashed : line.style_solid // Default style
+        line_ref := line.new(
+             prevDayIndex, 
+             price, 
+             bar_index, 
+             price, 
+             color=lineColor, 
+             width=width, 
+             style=lineStyleEnum, 
+             extend=extend.right)
+    line_ref
+
+// Function to create and manage labels
+create_label(float price, string labelText, color labelColor, bool showOHLC) =>
+    label label_ref = na
+    if (not na(price) and showOHLC)
+        label_ref := label.new(
+             bar_index + 40,
+             price, 
+             text=labelText , 
+             color=labelColor, 
+             textcolor=color.white, 
+             style=label.style_label_left, 
+             yloc=yloc.price)
+    label_ref
+
+// Delete previous lines and labels -OHLC
+if (not na(openLine))
+    line.delete(openLine)
+if (not na(highLine))
+    line.delete(highLine)
+if (not na(lowLine))
+    line.delete(lowLine)
+if (not na(closeLine))
+    line.delete(closeLine)
+
+if (not na(openLabel))
+    label.delete(openLabel)
+if (not na(highLabel))
+    label.delete(highLabel)
+if (not na(lowLabel))
+    label.delete(lowLabel)
+if (not na(closeLabel))
+    label.delete(closeLabel)
+
+// Create lines with different styles for OHLC
+openLine := create_line(todayDayOpen, color.blue, showOHLC, 2, "solid")
+highLine := create_line(prevDayHigh, color.maroon, showOHLC, 3, "dotted")
+lowLine := create_line(prevDayLow, color.maroon, showOHLC, 3, "dotted")
+closeLine := create_line(prevDayClose, color.orange, showOHLC, 3, "dotted")
+
+// Create labels with different styles - OHLC
+openLabel := create_label(todayDayOpen, "O", color.blue, showOHLC)
+highLabel := create_label(prevDayHigh, "H", color.red, showOHLC)
+lowLabel := create_label(prevDayLow, "L", color.green, showOHLC)
+closeLabel := create_label(prevDayClose, "C", color.orange, showOHLC)
+
+// ---------------------------------------------Drawing the OHLC Line ENDS----------------------------------------

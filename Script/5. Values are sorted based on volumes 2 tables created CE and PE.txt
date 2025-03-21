@@ -1,0 +1,140 @@
+//@version=6 
+indicator("Symbol and Nifty Information", overlay=true)
+
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.string(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+
+// Get symbol information
+symInfo = request.security(symbolInput, timeframe.period, close)
+
+// ==========================================
+// Nifty Section
+// ==========================================
+// Strike Price Settings
+strikePrice = input.int(defval=23200, title="Nifty Strike Price", group="Nifty Options")
+strikeInterval = input.int(defval=50, title="Strike Interval",  group="Nifty Options")
+numLevels = input.int(defval=5, title="Number of Levels", minval=1, maxval=10, group="Nifty Options")
+
+// Expiration Date Settings
+expDay = input.string("06", title="Expiration Day", group="Expiration")
+expMonth = input.string("02", title="Expiration Month",  group="Expiration")
+expYear = input.string("25", title="Expiration Year", group="Expiration")
+
+// Function to create organized strike levels
+createOrganizedStrikeLevels(basePrice, interval, levels) =>
+    var strikes = array.new_float(2 * levels + 1)
+    midIndex = levels
+    array.set(strikes, midIndex, basePrice)
+    for i = 1 to levels
+        array.set(strikes, midIndex - i, basePrice - (interval * i))
+        array.set(strikes, midIndex + i, basePrice + (interval * i))
+    strikes
+
+var strikeLevels = createOrganizedStrikeLevels(strikePrice, strikeInterval, numLevels)
+
+// Function to get data with proper error handling
+getdata(instrument, tf) =>
+    [rOpen, rClose, rVolume] = request.security(instrument, timeframe=tf, expression=[open, close[1], ((volume)/strikeInterval)], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+// Initialize arrays for symbols and data
+var string[] CEsymbols = array.new_string(11)
+var string[] PEsymbols = array.new_string(11)
+var float[] CE_Opens = array.new_float(11)
+var float[] CE_Closes = array.new_float(11)
+var float[] CE_Volumes = array.new_float(11)
+var float[] PE_Opens = array.new_float(11)
+var float[] PE_Closes = array.new_float(11)
+var float[] PE_Volumes = array.new_float(11)
+var float[] strikes = array.new_float(11)
+
+// Arrays for storing sorted indices
+var int[] sortedCEIndices = array.new_int(11)
+var int[] sortedPEIndices = array.new_int(11)
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to 10
+        strike = strikePrice + (strikeInterval * (i - 5))
+        array.set(strikes, i, strike)
+        
+        yearStr = expYear
+        monthStr = expMonth
+        dayStr = expDay
+        strikeStr = str.tostring(strike)
+        
+        ceSymbol = symbolInput + yearStr + monthStr + dayStr + "C" + strikeStr
+        peSymbol = symbolInput + yearStr + monthStr + dayStr + "P" + strikeStr
+        
+        array.set(CEsymbols, i, ceSymbol)
+        array.set(PEsymbols, i, peSymbol)
+        array.set(sortedCEIndices, i, i)
+        array.set(sortedPEIndices, i, i)
+
+// Fetch data for all strikes
+for i = 0 to 10
+    [ceOpen, ceClose, ceVolume] = getdata(array.get(CEsymbols, i), "D")
+    [peOpen, peClose, peVolume] = getdata(array.get(PEsymbols, i), "D")
+    
+    array.set(CE_Opens, i, ceOpen)
+    array.set(CE_Closes, i, ceClose)
+    array.set(CE_Volumes, i, ceVolume)
+    array.set(PE_Opens, i, peOpen)
+    array.set(PE_Closes, i, peClose)
+    array.set(PE_Volumes, i, peVolume)
+
+// Sort indices based on volumes (bubble sort)
+for i = 0 to 9
+    for j = 0 to 9 - i
+        // Sort CE volumes
+        if array.get(CE_Volumes, array.get(sortedCEIndices, j)) < array.get(CE_Volumes, array.get(sortedCEIndices, j + 1))
+            temp = array.get(sortedCEIndices, j)
+            array.set(sortedCEIndices, j, array.get(sortedCEIndices, j + 1))
+            array.set(sortedCEIndices, j + 1, temp)
+        
+        // Sort PE volumes
+        if array.get(PE_Volumes, array.get(sortedPEIndices, j)) < array.get(PE_Volumes, array.get(sortedPEIndices, j + 1))
+            temp = array.get(sortedPEIndices, j)
+            array.set(sortedPEIndices, j, array.get(sortedPEIndices, j + 1))
+            array.set(sortedPEIndices, j + 1, temp)
+
+// Create and display the tables with sorted data
+if barstate.islast
+    // CE Table
+    var table ceTable = table.new(position=position.top_right, columns=4, rows=12, bgcolor=color.new(color.black, 70), frame_width=1)
+    
+    // CE Table headers
+    table.cell(ceTable, 0, 0, "CE Strike", bgcolor=color.new(color.blue, 70))
+    table.cell(ceTable, 1, 0, "Open", bgcolor=color.new(color.blue, 70))
+    table.cell(ceTable, 2, 0, "Close", bgcolor=color.new(color.blue, 70))
+    table.cell(ceTable, 3, 0, "Volume", bgcolor=color.new(color.blue, 70))
+    
+    // PE Table
+    var table peTable = table.new(position=position.bottom_left, columns=4, rows=12, bgcolor=color.new(color.black, 70), frame_width=1)
+    
+    // PE Table headers
+    table.cell(peTable, 0, 0, "PE Strike", bgcolor=color.new(color.red, 70))
+    table.cell(peTable, 1, 0, "Open", bgcolor=color.new(color.red, 70))
+    table.cell(peTable, 2, 0, "Close", bgcolor=color.new(color.red, 70))
+    table.cell(peTable, 3, 0, "Volume", bgcolor=color.new(color.red, 70))
+    
+    // Fill tables with sorted data
+    for i = 0 to 10
+        ceIdx = array.get(sortedCEIndices, i)
+        peIdx = array.get(sortedPEIndices, i)
+        
+        // CE Table data
+        table.cell(ceTable, 0, i + 1, str.tostring(array.get(strikes, ceIdx)), 
+             bgcolor = color.new(color.blue, 90))
+        table.cell(ceTable, 1, i + 1, str.tostring(array.get(CE_Opens, ceIdx)))
+        table.cell(ceTable, 2, i + 1, str.tostring(array.get(CE_Closes, ceIdx)))
+        table.cell(ceTable, 3, i + 1, str.tostring(array.get(CE_Volumes, ceIdx)))
+        
+        // PE Table data
+        table.cell(peTable, 0, i + 1, str.tostring(array.get(strikes, peIdx)), 
+             bgcolor = color.new(color.red, 90))
+        table.cell(peTable, 1, i + 1, str.tostring(array.get(PE_Opens, peIdx)))
+        table.cell(peTable, 2, i + 1, str.tostring(array.get(PE_Closes, peIdx)))
+        table.cell(peTable, 3, i + 1, str.tostring(array.get(PE_Volumes, peIdx)))

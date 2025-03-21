@@ -1,0 +1,103 @@
+//@version=6
+indicator("NSE F&O Options Analyzer", overlay=true)
+
+// [Previous inputs and functions remain the same...]
+
+// Modify the getdata function to return live close prices
+getdata(instrument, tf) =>
+    [rOpen, rClose, rLive, rVolume] = request.security(instrument, timeframe=tf, expression=[open, close[1], close, volume / strikeInterval], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+    [rOpen, rClose, rLive, rVolume]
+
+// [Previous array initializations remain the same...]
+
+// Update the data collection to include live prices
+var float[] combinedLivePrices = array.new_float((numLevels * 2 + 1) * 2)
+
+// Fetch and combine CE and PE data
+for i = 0 to numLevels * 2
+    [ceOpen, ceClose, ceLive, ceVolume] = getdata(array.get(CEsymbols, i), "D")
+    [peOpen, peClose, peLive, peVolume] = getdata(array.get(PEsymbols, i), "D")
+    
+    // Store CE data
+    array.set(combinedStrikes, i, array.get(strikes, i))
+    array.set(combinedOpens, i, ceOpen)
+    array.set(combinedCloses, i, ceClose)
+    array.set(combinedLivePrices, i, ceLive)
+    array.set(combinedVolumes, i, ceVolume)
+    array.set(isCE, i, true)
+    array.set(combinedSymbols, i, array.get(CEsymbols, i))
+    
+    // Store PE data
+    array.set(combinedStrikes, i + numLevels * 2 + 1, array.get(strikes, i))
+    array.set(combinedOpens, i + numLevels * 2 + 1, peOpen)
+    array.set(combinedCloses, i + numLevels * 2 + 1, peClose)
+    array.set(combinedLivePrices, i + numLevels * 2 + 1, peLive)
+    array.set(combinedVolumes, i + numLevels * 2 + 1, peVolume)
+    array.set(isCE, i + numLevels * 2 + 1, false)
+    array.set(combinedSymbols, i + numLevels * 2 + 1, array.get(PEsymbols, i))
+
+// Calculate ATM average using live prices
+if barstate.islast
+    targetIndex = -1
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice
+            targetIndex := i
+            break
+    
+    if targetIndex != -1
+        ceIndex = targetIndex < numLevels * 2 + 1 ? targetIndex : targetIndex - (numLevels * 2 + 1)
+        peIndex = targetIndex < numLevels * 2 + 1 ? targetIndex + (numLevels * 2 + 1) : targetIndex
+        
+        ceLive = array.get(combinedLivePrices, ceIndex)
+        peLive = array.get(combinedLivePrices, peIndex)
+        
+        if not na(ceLive) and not na(peLive)
+            avgCloseATM = (ceLive + peLive)/2
+            
+            if showAvgCloseLevels
+                line.new(bar_index[1], avgCloseATM, bar_index, avgCloseATM, color=color.olive, width=1, extend=extend.right)
+                label.new(bar_index, avgCloseATM, "ATM", color=color.olive, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+
+// Calculate ITM average using live prices
+if barstate.islast
+    ceBelow2ndLevelIndex = -1
+    peAbove2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and array.get(isCE, i)
+            ceBelow2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and not array.get(isCE, i)
+            peAbove2ndLevelIndex := i
+    
+    if ceBelow2ndLevelIndex != -1 and peAbove2ndLevelIndex != -1
+        ceLiveBelow2ndLevel = array.get(combinedLivePrices, ceBelow2ndLevelIndex)
+        peLiveAbove2ndLevel = array.get(combinedLivePrices, peAbove2ndLevelIndex)
+        
+        if not na(ceLiveBelow2ndLevel) and not na(peLiveAbove2ndLevel)
+            avgCloseITM = (ceLiveBelow2ndLevel + peLiveAbove2ndLevel)/2
+            
+            if showAvgCloseLevels
+                line.new(bar_index[1], avgCloseITM, bar_index, avgCloseITM, color=color.purple, width=1, extend=extend.right)
+                label.new(bar_index, avgCloseITM, "ITM", color=color.purple, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+
+// Calculate OTM average using live prices
+if barstate.islast
+    ceAbove2ndLevelIndex = -1
+    peBelow2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and array.get(isCE, i)
+            ceAbove2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and not array.get(isCE, i)
+            peBelow2ndLevelIndex := i
+    
+    if ceAbove2ndLevelIndex != -1 and peBelow2ndLevelIndex != -1
+        ceLiveAbove2ndLevel = array.get(combinedLivePrices, ceAbove2ndLevelIndex)
+        peLiveBelow2ndLevel = array.get(combinedLivePrices, peBelow2ndLevelIndex)
+        
+        if not na(ceLiveAbove2ndLevel) and not na(peLiveBelow2ndLevel)
+            avgCloseOTM = (ceLiveAbove2ndLevel + peLiveBelow2ndLevel)/2
+            
+            if showAvgCloseLevels
+                line.new(bar_index[1], avgCloseOTM, bar_index, avgCloseOTM, color=color.orange, width=1, extend=extend.right)
+                label.new(bar_index, avgCloseOTM, "OTM", color=color.orange, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))

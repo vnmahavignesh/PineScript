@@ -1,0 +1,115 @@
+//@version=6 
+indicator("Symbol and Nifty Information", overlay=true)
+
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.string(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+
+// Get symbol information
+symInfo = request.security(symbolInput, timeframe.period, close)
+
+// ==========================================
+// Nifty Section
+// ==========================================
+// Strike Price Settings
+strikePrice = input.int(defval=23200, title="Nifty Strike Price", group="Nifty Options")
+strikeInterval = input.int(defval=50, title="Strike Interval",  group="Nifty Options")
+numLevels = input.int(defval=5, title="Number of Levels", minval=1, maxval=10, group="Nifty Options")
+
+// Expiration Date Settings
+expDay = input.string("06", title="Expiration Day", group="Expiration")
+expMonth = input.string("02", title="Expiration Month",  group="Expiration")
+expYear = input.string("25", title="Expiration Year", group="Expiration")
+
+// Function to create organized strike levels
+createOrganizedStrikeLevels(basePrice, interval, levels) =>
+    var strikes = array.new_float(2 * levels + 1)
+    midIndex = levels
+    array.set(strikes, midIndex, basePrice)
+    for i = 1 to levels
+        array.set(strikes, midIndex - i, basePrice - (interval * i))
+        array.set(strikes, midIndex + i, basePrice + (interval * i))
+    strikes
+
+var strikeLevels = createOrganizedStrikeLevels(strikePrice, strikeInterval, numLevels)
+
+// Function to get data with proper error handling
+getdata(instrument, tf) =>
+    [rOpen, rClose, rVolume] = request.security(instrument, timeframe=tf, expression=[open, close[1], ((volume)/strikeInterval)], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+// Initialize arrays for symbols and data
+var string[] CEsymbols = array.new_string(11)
+var string[] PEsymbols = array.new_string(11)
+var float[] strikes = array.new_float(11)
+
+// Combined arrays for CE and PE data
+var float[] combinedStrikes = array.new_float(22)  // 11 CE + 11 PE
+var float[] combinedOpens = array.new_float(22)
+var float[] combinedCloses = array.new_float(22)
+var float[] combinedVolumes  = array.new_float(22)
+var bool[] isCE = array.new_bool(22)  // true for CE, false for PE
+
+// Arrays for storing sorted indices
+var int[] sortedIndices = array.new_int(22)
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to 10
+        strike = strikePrice + (strikeInterval * (i - 5))
+        array.set(strikes, i, strike)
+        
+        yearStr = expYear
+        monthStr = expMonth
+        dayStr = expDay
+        strikeStr = str.tostring(strike)
+        
+        ceSymbol = symbolInput + yearStr + monthStr + dayStr + "C" + strikeStr
+        peSymbol = symbolInput + yearStr + monthStr + dayStr + "P" + strikeStr
+        
+        array.set(CEsymbols, i, ceSymbol)
+        array.set(PEsymbols, i, peSymbol)
+        array.set(sortedIndices, i, i)
+        array.set(sortedIndices, i + 11, i + 11)
+
+// Fetch and combine CE and PE data
+for i = 0 to 10
+    [ceOpen, ceClose, ceVolume] = getdata(array.get(CEsymbols, i), "D")
+    [peOpen, peClose, peVolume] = getdata(array.get(PEsymbols, i), "D")
+    
+    // Store CE data
+    array.set(combinedStrikes, i, array.get(strikes, i))
+    array.set(combinedOpens, i, ceOpen)
+    array.set(combinedCloses, i, ceClose)
+    array.set(combinedVolumes, i, ceVolume)
+    array.set(isCE, i, true)
+    
+    // Store PE data
+    array.set(combinedStrikes, i + 11, array.get(strikes, i))
+    array.set(combinedOpens, i + 11, peOpen)
+    array.set(combinedCloses, i + 11, peClose)
+    array.set(combinedVolumes, i + 11, peVolume)
+    array.set(isCE, i + 11, false)
+
+// Create and display the combined table
+if barstate.islast
+    var table combinedTable = table.new(position=position.top_right, columns=7, rows=23, bgcolor=color.new(color.black, 70), frame_width=0)
+    
+    // Table headers
+    table.cell(combinedTable, 0, 0, "Type", bgcolor=color.new(color.gray, 70))
+    table.cell(combinedTable, 1, 0, "Strike", bgcolor=color.new(color.gray, 70))
+    table.cell(combinedTable, 2, 0, "Open", bgcolor=color.new(color.gray, 70))
+    table.cell(combinedTable, 3, 0, "Close", bgcolor=color.new(color.gray, 70))
+    table.cell(combinedTable, 4, 0, "volume", bgcolor=color.new(color.gray, 70))
+    
+    // Fill table with combined data
+    for i = 0 to 21
+        type = array.get(isCE, i) ? "CE" : "PE"
+        bgColor = array.get(isCE, i) ? color.new(color.blue, 90) : color.new(color.red, 90)
+        
+        table.cell(combinedTable, 0, i + 1, type, bgcolor=bgColor)
+        table.cell(combinedTable, 1, i + 1, str.tostring(array.get(combinedStrikes, i)))
+        table.cell(combinedTable, 2, i + 1, str.tostring(array.get(combinedOpens, i)))
+        table.cell(combinedTable, 3, i + 1, str.tostring(array.get(combinedCloses, i)))
+        table.cell(combinedTable, 4, i + 1, str.tostring(array.get(combinedVolumes, i)))

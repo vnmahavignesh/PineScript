@@ -1,0 +1,73 @@
+//@version=6 
+indicator("Symbol and Nifty Information", overlay=true)
+plot(close)
+
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.string(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+
+// Strike Price Settings
+strikePrice = input.int(defval=23200, title="Nifty Strike Price", group="Nifty Options")
+strikeInterval = input.int(defval=50, title="Strike Interval",  group="Nifty Options")
+numLevels = input.int(defval=3, title="Number of Levels", minval=1, maxval=5, group="Nifty Options")  // Reduced max levels
+
+// Expiration Date Settings
+expDay = input.string("06", title="Expiration Day", group="Expiration")
+expMonth = input.string("02", title="Expiration Month",  group="Expiration")
+expYear = input.string("25", title="Expiration Year",  group="Expiration")
+
+
+// Generate organized strike levels
+var strikes = array.new_float(2 * numLevels + 1)
+if barstate.isfirst
+    midIndex = numLevels
+    array.set(strikes, midIndex, strikePrice)
+    for i = 1 to numLevels
+        array.set(strikes, midIndex - i, strikePrice - (strikeInterval * i))
+        array.set(strikes, midIndex + i, strikePrice + (strikeInterval * i))
+
+// Initialize arrays for symbols
+var string[] CEsymbols = array.new_string(2 * numLevels + 1)
+var string[] PEsymbols = array.new_string(2 * numLevels + 1)
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to 2 * numLevels
+        strike = array.get(strikes, i)
+        yearStr = expYear
+        monthStr = expMonth
+        dayStr = expDay
+        strikeStr = str.tostring(strike)
+        
+        ceSymbol = symbolInput + yearStr + monthStr + dayStr + "C" + strikeStr
+        peSymbol = symbolInput + yearStr + monthStr + dayStr + "P" + strikeStr
+        
+        array.set(CEsymbols, i, ceSymbol)
+        array.set(PEsymbols, i, peSymbol)
+
+// Create and position the table
+var table optionsTable = table.new(position.top_right, columns=6, rows=2 * numLevels + 2, bgcolor=color.white, border_width=1)
+
+// Table headers
+table.cell(optionsTable, 0, 0, "CE Open", bgcolor=color.blue, text_color=color.white)
+table.cell(optionsTable, 1, 0, "CE Close", bgcolor=color.blue, text_color=color.white)
+table.cell(optionsTable, 2, 0, "Strike", bgcolor=color.blue, text_color=color.white)
+table.cell(optionsTable, 3, 0, "PE Open", bgcolor=color.blue, text_color=color.white)
+table.cell(optionsTable, 4, 0, "PE Close", bgcolor=color.blue, text_color=color.white)
+
+// Update table data
+for i = 0 to 2 * numLevels
+    strike = array.get(strikes, i)
+    
+    ceOpen = request.security(array.get(CEsymbols, i), timeframe.period, open)
+    peOpen = request.security(array.get(PEsymbols, i), timeframe.period, open)
+    ceClose = request.security(array.get(CEsymbols, i), timeframe.period, close)
+    peClose = request.security(array.get(PEsymbols, i), timeframe.period, close)    
+    
+    table.cell(optionsTable, 0, i + 1, str.tostring(ceClose))
+    table.cell(optionsTable, 1, i + 1, str.tostring(ceOpen))
+    table.cell(optionsTable, 2, i + 1, str.tostring(strike))
+    table.cell(optionsTable, 3, i + 1, str.tostring(peOpen))
+    table.cell(optionsTable, 4, i + 1, str.tostring(peClose))

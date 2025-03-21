@@ -1,0 +1,266 @@
+//@version=6
+indicator("Nifty Symbol with Maps", overlay=true)
+
+// ==========================================
+// Inputs
+// ==========================================
+// Symbol Selection
+symInput = input.string("NIFTY", "Trading Symbol (e.g., NIFTY, RELIANCE, TCS)", group="General Settings", tooltip="Enter the trading symbol for the instrument you want to analyze.")
+
+// Convert the input to uppercase
+symbolInput = str.upper(symInput)
+
+// Strike Price and Levels
+strikePrice = input.float(22800, "Strike Price", group="Strike Settings", inline="STRIKE")
+strikeInterval = input.float(50, "Interval", group="Strike Settings", inline="STRIKE")
+numLevels = input.int(5, "Levels", minval=1, maxval=10, group="Strike Settings", inline="STRIKE")
+
+// Expiration Date
+expDay = input.int(27, "ExpDay", group="Expiration Settings", inline="EXP")
+expMonth = input.int(02, "ExpMonth", group="Expiration Settings", inline="EXP")
+expYear = input.int(25, "ExpYear", group="Expiration Settings", inline="EXP")
+
+// Function to add leading zero
+addLeadingZero(value) =>
+    str.tostring(value < 10 ? "0" + str.tostring(value) : str.tostring(value))
+
+// Format expiration date components with leading zeros
+formattedExpDay = addLeadingZero(expDay)
+formattedExpMonth = addLeadingZero(expMonth)
+formattedExpYear = addLeadingZero(expYear)
+
+// Display Options
+showTable = input.bool(true, "TB", group="Display Options", inline="DO")
+showAdjustedStrikePrices = input.bool(false, "GN", group="Display Options", inline="DO")
+showSupportResistance = input.bool(false, "U.IDX", group="Display Options", inline="DO")
+showSupportResistanceLevels = input.bool(false, title="A.IDX", group="Display Options", inline="DO")
+showAvgCloseLevels = input.bool(false, "STL", group="Display Options", inline="DO")
+dynamicAvgCloseLevels = input.bool(false, "DYL", group="Display Options", inline="DO")
+plotCePeSumAtm = input.bool(false, "CPL", group="Display Options", inline="DO")
+showOHLC = input.bool(title="OHLC", defval=true, group="Display Options", inline="DO")
+dynamicSignal = input.bool(false, title="Dsig", group="Display Options", inline="DO")
+
+displayMode = input.string("Show All Levels", "Display Mode", 
+     options=["CE Only", "PE Only", "Hide All Levels", "Show All Levels"], 
+     group="Display Options")
+
+labelSize = input.string("Normal", "Label Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add table font size option
+tableFontSize = input.string("Normal", "Table Font Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add this to the "Display Options" input group
+tablePosition = input.string("Top Right", "Table Position", 
+     options=["Top Left", "Top Right", "Top Center", "Bottom Left", "Bottom Right", "Bottom Center", "Middle Left", "Middle Right", "Middle Center"], 
+     group="Display Options")
+
+maxTableRows = input.int(10, "Max Table Rows", minval=1, maxval=50, group="Display Options")
+
+// ==========================================
+// Functions
+// ==========================================
+
+// Function to get data with proper error handling 
+getdata(instrument, tf) =>
+    [rOpen, rClose, rVolume, prhigh, prlow] = request.security(instrument, timeframe=tf, expression=[open, close[1], volume, high[1], low[1]], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+[todayDayOpen, prevDayHigh, prevDayLow, prevDayClose] = request.security(syminfo.tickerid, "D", [open, high[1], low[1], close[1]])
+[symbolOpen, livePrice] = request.security(symbolInput, "D", expression=[open, close])
+
+// Function to convert label size string to size enum
+getLabelSize(size) =>
+    switch size
+        "Auto" => size.auto
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to convert table font size string to size enum
+getTableFontSize(size) =>
+    switch size
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to get table position
+getTablePosition(pos) =>
+    switch pos
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Top Center" => position.top_center
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Center" => position.bottom_center
+        "Middle Left" => position.middle_left
+        "Middle Right" => position.middle_right
+        "Middle Center" => position.middle_center
+
+// ==========================================
+// Main Logic
+// ==========================================
+
+// Initialize maps for symbols and data
+var map<float, string> CEsymbolsMap = map.new<float, string>()
+var map<float, string> PEsymbolsMap = map.new<float, string>()
+var map<float, float> strikesMap = map.new<float, float>()
+
+// Combined maps for CE and PE data
+var map<float, float> combinedStrikesMap = map.new<float, float>()
+var map<float, float> combinedOpensMap = map.new<float, float>()
+var map<float, float> combinedClosesMap = map.new<float, float>()
+var map<float, float> combinedVolumesMap = map.new<float, float>()
+var map<float, bool> isCEMap = map.new<float, bool>()
+var map<float, string> combinedSymbolsMap = map.new<float, string>()
+var map<float, float> combinedPrHighsMap = map.new<float, float>()
+var map<float, float> combinedPrLowsMap = map.new<float, float>()
+
+// Store previous day's bar index
+var int prevDayIndex = na
+
+// Update previous day's index when a new day starts
+if dayofweek != dayofweek[1]
+    prevDayIndex := bar_index[1]
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to numLevels * 2
+        strike = strikePrice + (strikeInterval * (i - numLevels))
+        map.put(strikesMap, strike, strike)
+        
+        ceSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strike)
+        peSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strike)
+        
+        map.put(CEsymbolsMap, strike, ceSymbol)
+        map.put(PEsymbolsMap, strike, peSymbol)
+
+// Fetch and combine CE and PE data
+for i = 0 to numLevels * 2
+    strike = strikePrice + (strikeInterval * (i - numLevels))
+    ceSymbol = map.get(CEsymbolsMap, strike)
+    peSymbol = map.get(PEsymbolsMap, strike)
+    
+    [ceOpen, ceClose, ceVolume, cePrhigh, cePrLow] = getdata(ceSymbol, "D")
+    [peOpen, peClose, peVolume, pePrhigh, pePrLow] = getdata(peSymbol, "D")
+    
+    // Store CE data
+    map.put(combinedStrikesMap, strike, strike)
+    map.put(combinedOpensMap, strike, ceOpen)
+    map.put(combinedClosesMap, strike, ceClose)
+    map.put(combinedVolumesMap, strike, ceVolume)
+    map.put(isCEMap, strike, true)
+    map.put(combinedSymbolsMap, strike, ceSymbol)
+    map.put(combinedPrHighsMap, strike, cePrhigh)
+    map.put(combinedPrLowsMap, strike, cePrLow)
+
+    // Store PE data
+    map.put(combinedStrikesMap, strike + numLevels * 2 + 1, strike)
+    map.put(combinedOpensMap, strike + numLevels * 2 + 1, peOpen)
+    map.put(combinedClosesMap, strike + numLevels * 2 + 1, peClose)
+    map.put(combinedVolumesMap, strike + numLevels * 2 + 1, peVolume)
+    map.put(isCEMap, strike + numLevels * 2 + 1, false)
+    map.put(combinedSymbolsMap, strike + numLevels * 2 + 1, peSymbol)
+    map.put(combinedPrHighsMap, strike + numLevels * 2 + 1, pePrhigh)
+    map.put(combinedPrLowsMap, strike + numLevels * 2 + 1, pePrLow)
+
+// ==========================================
+// Table Creation with Alternative Sorting
+// ==========================================
+
+if showTable
+    var table tbl = table.new(getTablePosition(tablePosition), 8, 50, bgcolor=color.new(color.gray, 90), border_width=1)
+    
+    // Extract data into arrays
+    var float[] strikes = array.new_float()
+    var float[] volumes = array.new_float()
+    var float[] opens = array.new_float()
+    var float[] closes = array.new_float()  // New array for close prices
+    var string[] symbols = array.new_string()
+    var string[] cepe = array.new_string()
+
+    // Clear previous data
+    array.clear(strikes)
+    array.clear(volumes)
+    array.clear(opens)
+    array.clear(closes)  // Clear close prices array
+    array.clear(symbols)
+    array.clear(cepe)
+
+    for i = 0 to numLevels * 2
+        strike = strikePrice + (strikeInterval * (i - numLevels))
+        ceSymbol = map.get(CEsymbolsMap, strike)
+        peSymbol = map.get(PEsymbolsMap, strike)
+        
+        // CE Data
+        array.push(strikes, strike)
+        array.push(volumes, map.get(combinedVolumesMap, strike))
+        array.push(opens, map.get(combinedOpensMap, strike))
+        array.push(closes, map.get(combinedClosesMap, strike))  // Add CE close price
+        array.push(symbols, ceSymbol)
+        array.push(cepe, "CE")
+        
+        // PE Data
+        array.push(strikes, strike)
+        array.push(volumes, map.get(combinedVolumesMap, strike + numLevels * 2 + 1))
+        array.push(opens, map.get(combinedOpensMap, strike + numLevels * 2 + 1))
+        array.push(closes, map.get(combinedClosesMap, strike + numLevels * 2 + 1))  // Add PE close price
+        array.push(symbols, peSymbol)
+        array.push(cepe, "PE")
+
+    // Manual bubble sort implementation for descending order
+    arraySize = array.size(volumes)
+    for i = 0 to arraySize - 2
+        for j = 0 to arraySize - i - 2
+            if array.get(volumes, j) < array.get(volumes, j + 1)
+                // Swap volumes
+                tempVolume = array.get(volumes, j)
+                array.set(volumes, j, array.get(volumes, j + 1))
+                array.set(volumes, j + 1, tempVolume)
+                
+                // Swap strikes
+                tempStrike = array.get(strikes, j)
+                array.set(strikes, j, array.get(strikes, j + 1))
+                array.set(strikes, j + 1, tempStrike)
+                
+                // Swap opens
+                tempOpen = array.get(opens, j)
+                array.set(opens, j, array.get(opens, j + 1))
+                array.set(opens, j + 1, tempOpen)
+                
+                // Swap closes
+                tempClose = array.get(closes, j)  // Swap close prices
+                array.set(closes, j, array.get(closes, j + 1))
+                array.set(closes, j + 1, tempClose)
+                
+                // Swap symbols
+                tempSymbol = array.get(symbols, j)
+                array.set(symbols, j, array.get(symbols, j + 1))
+                array.set(symbols, j + 1, tempSymbol)
+                
+                // Swap CE/PE indicators
+                tempCePe = array.get(cepe, j)
+                array.set(cepe, j, array.get(cepe, j + 1))
+                array.set(cepe, j + 1, tempCePe)
+
+    // Add headers
+    table.cell(tbl, 0, 0, "Rank", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 1, 0, "Strike Price", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 2, 0, "CE/PE", text_size=getTableFontSize(tableFontSize), text_color=color.black)    
+    table.cell(tbl, 3, 0, "Volume", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 4, 0, "Open", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 5, 0, "Close", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for Close
+    
+    // Populate the table with sorted data
+    for i = 0 to arraySize - 1
+        if i >= maxTableRows
+            break
+        
+        table.cell(tbl, 0, i + 1, str.tostring(i + 1), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Serial number
+        table.cell(tbl, 1, i + 1, str.tostring(array.get(strikes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 2, i + 1, array.get(cepe, i), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 3, i + 1, str.tostring(array.get(volumes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 4, i + 1, str.tostring(array.get(opens, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 5, i + 1, str.tostring(array.get(closes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Display Close prices

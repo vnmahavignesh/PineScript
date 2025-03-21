@@ -1,0 +1,132 @@
+//@version=6 
+indicator("Symbol and Nifty Information", overlay=true)
+
+
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.string(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+
+// Get symbol information
+symInfo = request.security(symbolInput, timeframe.period, close)
+
+// ==========================================
+// Nifty Section
+// ==========================================
+// Strike Price Settings
+strikePrice = input.int(defval=23200, title="Nifty Strike Price", group="Nifty Options")
+strikeInterval = input.int(defval=50, title="Strike Interval",  group="Nifty Options")
+numLevels = input.int(defval=5, title="Number of Levels", minval=1, maxval=10, group="Nifty Options")
+
+// Expiration Date Settings
+expDay = input.string("06", title="Expiration Day", group="Expiration")
+expMonth = input.string("02", title="Expiration Month",  group="Expiration")
+expYear = input.string("25", title="Expiration Year", group="Expiration")
+
+// Function to create organized strike levels
+createOrganizedStrikeLevels(basePrice, interval, levels) =>
+    var strikes = array.new_float(2 * levels + 1)  // Total size: levels above + base + levels below
+    
+    // Add base price at the middle
+    midIndex = levels
+    array.set(strikes, midIndex, basePrice)
+    
+    // Add levels above and below simultaneously
+    for i = 1 to levels
+        // Add level above
+        array.set(strikes, midIndex - i, basePrice - (interval * i))  // Below levels
+        array.set(strikes, midIndex + i, basePrice + (interval * i))  // Above levels
+    
+    strikes
+
+// Generate organized strike levels
+var strikeLevels = createOrganizedStrikeLevels(strikePrice, strikeInterval, numLevels)
+
+// Function to determine if price is near a level
+isPriceNearLevel(price, level) =>
+    math.abs(price - level) <= strikeInterval / 2
+
+// Function to get data with proper error handling
+getdata(instrument, tf) =>
+       [rOpen, rClose, rVolume]=request.security(instrument,timeframe =tf,expression=[open,close[1],((volume)/strikeInterval)],lookahead=barmerge.lookahead_off,ignore_invalid_symbol =true)
+
+// Initialize arrays for symbols
+var string[] CEsymbols = array.new_string(11)
+var string[] PEsymbols = array.new_string(11)
+
+// Arrays for storing data
+var float[] CE_Opens = array.new_float(11)
+var float[] CE_Closes = array.new_float(11)
+var float[] CE_Volumes = array.new_float(11)
+var float[] PE_Opens = array.new_float(11)
+var float[] PE_Closes = array.new_float(11)
+var float[] PE_Volumes = array.new_float(11)
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to 10
+        strike = strikePrice + (strikeInterval * (i - 5))
+        // Format strings properly with padding
+        yearStr = expYear
+        monthStr = expMonth
+        dayStr = expDay
+        strikeStr = str.tostring(strike)
+        
+        ceSymbol = symbolInput + yearStr + monthStr + dayStr + "C" + strikeStr
+        peSymbol = symbolInput + yearStr + monthStr + dayStr + "P" + strikeStr
+        
+        array.set(CEsymbols, i, ceSymbol)
+        array.set(PEsymbols, i, peSymbol)
+
+// Fetch data for all strikes using a loop
+for i = 0 to 10
+    [ceOpen, ceClose, ceVolume] = getdata(array.get(CEsymbols, i), "D")
+    [peOpen, peClose, peVolume] = getdata(array.get(PEsymbols, i), "D")
+    
+    array.set(CE_Opens, i, ceOpen)
+    array.set(CE_Closes, i, ceClose)
+    array.set(CE_Volumes, i, ceVolume)
+    array.set(PE_Opens, i, peOpen)
+    array.set(PE_Closes, i, peClose)
+    array.set(PE_Volumes, i, peVolume)
+
+// Access data using array indices instead of individual variables
+// Example: array.get(CE_Opens, 0) instead of CE1_Open
+// Create and configure the table
+var table dataTable = table.new(position.top_right, columns=4, rows=24, bgcolor=color.new(color.black, 70), border_width=1)
+
+// Update table headers
+if barstate.isfirst
+    table.cell(dataTable, 0, 0, "Strike", bgcolor=color.gray, text_color=color.white)
+    table.cell(dataTable, 1, 0, "Open", bgcolor=color.gray, text_color=color.white)
+    table.cell(dataTable, 2, 0, "Close", bgcolor=color.gray, text_color=color.white)
+    table.cell(dataTable, 3, 0, "Volume", bgcolor=color.gray, text_color=color.white)
+
+// Update table data
+if barstate.islast
+    for i = 0 to 10
+        strike = strikePrice + (strikeInterval * (i - 5))
+        
+        // Format the values
+        ceOpen = array.get(CE_Opens, i)
+        ceClose = array.get(CE_Closes, i)
+        ceVolume = array.get(CE_Volumes, i)
+        
+        // Update table cells with fixed formatting
+        table.cell(dataTable, 0, i + 1, str.tostring(strike), 
+             bgcolor=color.new(color.blue, 90), 
+             text_color=color.white)        
+        table.cell(dataTable,1,i+1,str.tostring(ceOpen))
+        table.cell(dataTable,2,i+1,str.tostring(ceClose))
+        table.cell(dataTable,3,i+1,str.tostring(ceVolume)) 
+
+        // table.cell(dataTable, 1, i + 1, str.format("{0}", ceOpen), 
+        //      bgcolor=color.new(color.blue, 90),
+        //      text_color=color.white)                 
+        // table.cell(dataTable, 2, i + 1, str.format("{0}", ceClose),
+        //      bgcolor=color.new(color.blue, 90),
+        //      text_color=color.white)
+        // table.cell(dataTable, 3, i + 1, str.format("{0}", ceVolume),
+        //      bgcolor=color.new(color.blue, 90),
+        //      text_color=color.white)
