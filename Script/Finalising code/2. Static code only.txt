@@ -1,0 +1,118 @@
+//--------------------------------------------Static Line code starts---------------------------------------------------------------
+// Calculate and draw the sum of CE close and PE close for the user-specified strike price
+var float avgCloseATM = na // Make avgCloseATM available globally
+if barstate.islast
+    // Find the correct index for the specified strike price
+    targetIndex = -1
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice
+            targetIndex := i
+            break
+    
+    // If a matching strike price is found
+    if targetIndex != -1
+        // Determine the corresponding CE and PE indices
+        ceIndex = targetIndex < numLevels * 2 + 1 ? targetIndex : targetIndex - (numLevels * 2 + 1)
+        peIndex = targetIndex < numLevels * 2 + 1 ? targetIndex + (numLevels * 2 + 1) : targetIndex
+        
+        ceClose = array.get(combinedCloses, ceIndex)
+        peClose = array.get(combinedCloses, peIndex)            
+
+        if not na(ceClose) and not na(peClose)
+            avgCloseATM := (ceClose + peClose) / 2
+            
+            // Draw horizontal line for the sum of CE close and PE close 
+            if showAvgCloseLevels
+                line.new(prevDayIndex, avgCloseATM, bar_index, avgCloseATM, color=color.olive, width=1, extend=extend.right)
+                
+                // Label the sum with the strike price
+                label.new(prevDayIndex, avgCloseATM, "ATM", color=color.olive, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+            // Draw the SR Levels
+            minor_support = strikePrice - peClose 
+            minor_resistance = strikePrice + ceClose
+            major_support = strikePrice - (ceClose + peClose)
+            major_resistance = strikePrice + (ceClose + peClose)
+
+            // Draw and label the support and resistance levels if the checkbox is enabled - User defined strike price
+            if showSupportResistance
+                // Draw horizontal line for minor_support
+                line.new(prevDayIndex, minor_support, bar_index, minor_support, color=color.black, width=2, extend=extend.right)
+                
+                // Label the minor_support
+                label.new(bar_index + 40, minor_support, "S1", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+                // Draw horizontal line for minor_resistance
+                line.new(prevDayIndex, minor_resistance, bar_index, minor_resistance, color=color.black, width=2, extend=extend.right)
+                
+                // Label the minor_resistance
+                label.new(bar_index + 40, minor_resistance, "R1", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+                // Draw horizontal line for major_support
+                line.new(prevDayIndex, major_support, bar_index, major_support, color=color.black, width=2, extend=extend.right)
+                
+                // Label the major_support
+                label.new(bar_index + 40, major_support, "S2", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+               
+                // Draw horizontal line for major_resistance
+                line.new(prevDayIndex, major_resistance, bar_index, major_resistance, color=color.black, width=2, extend=extend.right)
+                
+                // Label the major_resistance
+                label.new(bar_index + 40, major_resistance, "R2", color=color.black, textcolor=color.white, style=label.style_label_left, size=getLabelSize(labelSize))
+
+// Calculate the sum of CE previous day close of below 2nd level and PE previous day close of above 2nd level for user-defined strike price
+var float avgCloseITM = na // Make avgCloseOTM available globally
+if barstate.islast
+    // Find the indices for the 2nd level below and above the user-defined strike price
+    ceBelow2ndLevelIndex = -1
+    peAbove2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and array.get(isCE, i)
+            ceBelow2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and not array.get(isCE, i)
+            peAbove2ndLevelIndex := i
+    
+    // If both indices are found
+    if ceBelow2ndLevelIndex != -1 and peAbove2ndLevelIndex != -1
+        ceCloseBelow2ndLevel = array.get(combinedCloses, ceBelow2ndLevelIndex)
+        peCloseAbove2ndLevel = array.get(combinedCloses, peAbove2ndLevelIndex)
+        
+        if not na(ceCloseBelow2ndLevel) and not na(peCloseAbove2ndLevel)
+            avgCloseITM := (ceCloseBelow2ndLevel + peCloseAbove2ndLevel) / 2
+            
+            // Draw horizontal line for the sum of CE close and PE close
+            if showAvgCloseLevels
+                line.new(prevDayIndex, avgCloseITM, bar_index, avgCloseITM, color=color.purple, width=1, extend=extend.right)
+                
+                // Label the sum with the strike price
+                label.new(prevDayIndex, avgCloseITM, "ITM", color=color.purple, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+
+// Calculate the sum of CE previous day close of above 2nd level and PE previous day close of below 2nd level for user-defined strike price
+var float avgCloseOTM = na // Make avgCloseOTM available globally
+if barstate.islast
+    // Find the indices for the 2nd level below and above the user-defined strike price
+    ceAbove2ndLevelIndex = -1
+    peBelow2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and array.get(isCE, i)
+            ceAbove2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and not array.get(isCE, i)
+            peBelow2ndLevelIndex := i
+    
+    // If both indices are found
+    if ceAbove2ndLevelIndex != -1 and peBelow2ndLevelIndex != -1
+        ceCloseAbove2ndLevel = array.get(combinedCloses, ceAbove2ndLevelIndex)
+        peCloseBelow2ndLevel = array.get(combinedCloses, peBelow2ndLevelIndex)
+        
+        if not na(ceCloseAbove2ndLevel) and not na(peCloseBelow2ndLevel)
+            avgCloseOTM := (ceCloseAbove2ndLevel + peCloseBelow2ndLevel) / 2
+            
+            // Draw horizontal line for the sum of CE close and PE close
+            if showAvgCloseLevels
+                line.new(prevDayIndex, avgCloseOTM, bar_index, avgCloseOTM, color=color.orange, width=1, extend=extend.right)
+                
+                // Label the sum with the strike price
+                label.new(prevDayIndex, avgCloseOTM, "OTM", color=color.orange, textcolor=color.white, style=label.style_label_right, size=getLabelSize(labelSize))
+
+//------------------------------------------------End of static code--------------------------------------

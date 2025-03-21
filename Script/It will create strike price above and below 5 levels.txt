@@ -1,0 +1,78 @@
+//@version=6
+indicator("Symbol and Nifty Information", overlay=true)
+plot(close)
+
+// ==========================================
+// Symbol Information Section
+// ==========================================
+var string DEFAULT_SYMBOL = "NIFTY"
+symbolInput = input.symbol(DEFAULT_SYMBOL, "Trading Symbol", confirm=true)
+
+// Get symbol information
+symInfo = request.security(symbolInput, timeframe.period, close)
+
+// ==========================================
+// Nifty Section
+// ==========================================
+// Strike Price Settings
+strikePrice = input.int(defval=23200, title="Nifty Strike Price", group="Nifty Options")
+strikeInterval = input.int(defval=50, title="Strike Interval",  group="Nifty Options")
+numLevels = input.int(defval=5, title="Number of Levels", minval=1, maxval=10, group="Nifty Options")
+
+// Expiration Date Settings
+expDay = input.int(defval=30, title="Expiration Day", minval=1, maxval=31, group="Expiration")
+expMonth = input.int(defval=1, title="Expiration Month", minval=1, maxval=12, group="Expiration")
+expYear = input.int(defval=2025, title="Expiration Year", minval=2024, group="Expiration")
+
+// Function to create organized strike levels
+createOrganizedStrikeLevels(basePrice, interval, levels) =>
+    var strikes = array.new_float(2 * levels + 1)  // Total size: levels above + base + levels below
+    
+    // Add base price at the middle
+    midIndex = levels
+    array.set(strikes, midIndex, basePrice)
+    
+    // Add levels above and below simultaneously
+    for i = 1 to levels
+        // Add level above
+        array.set(strikes, midIndex - i, basePrice - (interval * i))  // Below levels
+        array.set(strikes, midIndex + i, basePrice + (interval * i))  // Above levels
+    
+    strikes
+
+// Generate organized strike levels
+var strikeLevels = createOrganizedStrikeLevels(strikePrice, strikeInterval, numLevels)
+
+// Function to determine if price is near a level
+isPriceNearLevel(price, level) =>
+    math.abs(price - level) <= strikeInterval / 2
+
+// Create and position the table
+var table levelsTable = table.new(position.top_right, columns=2, rows=array.size(strikeLevels), bgcolor=color.white, border_width=1)
+
+// Update table content
+if barstate.islast
+    for i = 0 to array.size(strikeLevels) - 1
+        level = array.get(strikeLevels, i)
+        isBaseLevel = level == strikePrice
+        isNearPrice = isPriceNearLevel(close, level)
+        
+        // Determine text color based on level type
+        textColor = isBaseLevel ? color.orange : 
+                   level > strikePrice ? color.rgb(76, 175, 80) : 
+                   color.rgb(255, 82, 82)
+        
+        // Add highlight if price is near this level
+        bgColor = isNearPrice ? color.rgb(255, 255, 255, 90) : color.rgb(0, 0, 0, 80)
+        
+        // Update table cells
+        table.cell(levelsTable, 0, i, 
+                  level < strikePrice ? "Below " + str.tostring(math.abs(i - numLevels)) :
+                  level == strikePrice ? "Base" :
+                  "Above " + str.tostring(i - numLevels), 
+                  text_color=color.white, 
+                  bgcolor=bgColor)
+        
+        table.cell(levelsTable, 1, i, str.tostring(level), 
+                  text_color=textColor, 
+                  bgcolor=bgColor)
