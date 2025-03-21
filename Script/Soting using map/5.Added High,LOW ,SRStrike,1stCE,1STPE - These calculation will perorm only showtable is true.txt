@@ -1,0 +1,393 @@
+//@version=6
+indicator("Nifty Symbol with Maps", overlay=true)
+
+// ==========================================
+// Inputs
+// ==========================================
+// Symbol Selection
+symInput = input.string("NIFTY", "Trading Symbol (e.g., NIFTY, RELIANCE, TCS)", group="General Settings", tooltip="Enter the trading symbol for the instrument you want to analyze.")
+
+// Convert the input to uppercase
+symbolInput = str.upper(symInput)
+
+// Strike Price and Levels
+strikePrice = input.float(22800, "Strike Price", group="Strike Settings", inline="STRIKE")
+strikeInterval = input.float(50, "Interval", group="Strike Settings", inline="STRIKE")
+numLevels = input.int(7, "Levels", minval=1, maxval=10, group="Strike Settings", inline="STRIKE")
+
+// Expiration Date
+expDay = input.int(27, "ExpDay", group="Expiration Settings", inline="EXP")
+expMonth = input.int(03, "ExpMonth", group="Expiration Settings", inline="EXP")
+expYear = input.int(25, "ExpYear", group="Expiration Settings", inline="EXP")
+
+// Function to add leading zero
+addLeadingZero(value) =>
+    str.tostring(value < 10 ? "0" + str.tostring(value) : str.tostring(value))
+
+// Format expiration date components with leading zeros
+formattedExpDay = addLeadingZero(expDay)
+formattedExpMonth = addLeadingZero(expMonth)
+formattedExpYear = addLeadingZero(expYear)
+
+// Display Options
+showTable = input.bool(true, "TB", group="Display Options", inline="DO")
+showAdjustedStrikePrices = input.bool(false, "GN", group="Display Options", inline="DO")
+showSupportResistance = input.bool(false, "U.IDX", group="Display Options", inline="DO")
+showSupportResistanceLevels = input.bool(false, title="A.IDX", group="Display Options", inline="DO")
+showAvgCloseLevels = input.bool(false, "STL", group="Display Options", inline="DO")
+dynamicAvgCloseLevels = input.bool(false, "DYL", group="Display Options", inline="DO")
+plotCePeSumAtm = input.bool(false, "CPL", group="Display Options", inline="DO")
+showOHLC = input.bool(title="OHLC", defval=true, group="Display Options", inline="DO")
+dynamicSignal = input.bool(false, title="Dsig", group="Display Options", inline="DO")
+
+displayMode = input.string("Show All Levels", "Display Mode", 
+     options=["CE Only", "PE Only", "Hide All Levels", "Show All Levels"], 
+     group="Display Options")
+
+labelSize = input.string("Normal", "Label Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add table font size option
+tableFontSize = input.string("Normal", "Table Font Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="Display Options")
+
+// Add this to the "Display Options" input group
+tablePosition = input.string("Top Right", "Table Position", 
+     options=["Top Left", "Top Right", "Top Center", "Bottom Left", "Bottom Right", "Bottom Center", "Middle Left", "Middle Right", "Middle Center"], 
+     group="Display Options")
+
+maxTableRows = input.int(10, "Max Table Rows", minval=1, maxval=50, group="Display Options")
+
+// ==========================================
+// Functions
+// ==========================================
+
+// Function to get data with proper error handling 
+getdata(instrument, tf) =>
+    [rOpen, rClose, rVolume, prhigh, prlow,pdVolume,ltp] = request.security(instrument, timeframe=tf, expression=[open, close[1], volume, high[1], low[1],volume[1],close], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+[todayDayOpen, prevDayHigh, prevDayLow, prevDayClose] = request.security(syminfo.tickerid, "D", [open, high[1], low[1], close[1]])
+[symbolOpen, livePrice] = request.security(symbolInput, "D", expression=[open, close])
+
+// Function to convert label size string to size enum
+getLabelSize(size) =>
+    switch size
+        "Auto" => size.auto
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to convert table font size string to size enum
+getTableFontSize(size) =>
+    switch size
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+
+// Function to get table position
+getTablePosition(pos) =>
+    switch pos
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Top Center" => position.top_center
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Center" => position.bottom_center
+        "Middle Left" => position.middle_left
+        "Middle Right" => position.middle_right
+        "Middle Center" => position.middle_center
+
+// ==========================================
+// Main Logic
+// ==========================================
+
+// Initialize maps for symbols and data
+var map<float, string> CEsymbolsMap = map.new<float, string>()
+var map<float, string> PEsymbolsMap = map.new<float, string>()
+var map<float, float> strikesMap = map.new<float, float>()
+
+// Combined maps for CE and PE data
+var map<float, float> combinedStrikesMap = map.new<float, float>()
+var map<float, float> combinedOpensMap = map.new<float, float>()
+var map<float, float> combinedClosesMap = map.new<float, float>()
+var map<float, float> combinedVolumesMap = map.new<float, float>()
+var map<float, float> combinedPrevVolumesMap = map.new<float, float>()  // New map to store previous volumes
+var map<float, bool> isCEMap = map.new<float, bool>()
+var map<float, string> combinedSymbolsMap = map.new<float, string>()
+var map<float, float> combinedPrHighsMap = map.new<float, float>()
+var map<float, float> combinedPrLowsMap = map.new<float, float>()
+var map<float, float> combinedPdVolumesMap = map.new<float, float>()
+var map<float, float> combinedLtpMap = map.new<float, float>()
+var map<float, float> combinedPreVolumesMap = map.new<float, float>()
+
+// Store previous day's bar index
+var int prevDayIndex = na
+
+// Update previous day's index when a new day starts
+if dayofweek != dayofweek[1]
+    prevDayIndex := bar_index[1]
+
+// Generate symbols only once
+if barstate.isfirst
+    for i = 0 to numLevels * 2
+        strike = strikePrice + (strikeInterval * (i - numLevels))
+        map.put(strikesMap, strike, strike)
+        
+        ceSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "C" + str.tostring(strike)
+        peSymbol = symbolInput + formattedExpYear + formattedExpMonth + formattedExpDay + "P" + str.tostring(strike)
+        
+        map.put(CEsymbolsMap, strike, ceSymbol)
+        map.put(PEsymbolsMap, strike, peSymbol)
+
+// Fetch and combine CE and PE data
+for i = 0 to numLevels * 2
+    strike = strikePrice + (strikeInterval * (i - numLevels))
+    ceSymbol = map.get(CEsymbolsMap, strike)
+    peSymbol = map.get(PEsymbolsMap, strike)
+    
+    [ceOpen, ceClose, ceVolume, cePrhigh, cePrLow,cePdVolume, ceLtp] = getdata(ceSymbol, "D")
+    [peOpen, peClose, peVolume, pePrhigh, pePrLow,pePdVolume, peLtp] = getdata(peSymbol, "D")
+    
+    // Store CE data
+    map.put(combinedStrikesMap, strike, strike)
+    map.put(combinedOpensMap, strike, ceOpen)
+    map.put(combinedClosesMap, strike, ceClose)
+    map.put(combinedVolumesMap, strike, ceVolume)
+    map.put(isCEMap, strike, true)
+    map.put(combinedSymbolsMap, strike, ceSymbol)
+    map.put(combinedPrHighsMap, strike, cePrhigh)
+    map.put(combinedPrLowsMap, strike, cePrLow)
+    map.put(combinedPdVolumesMap, strike, cePdVolume)
+    map.put(combinedLtpMap, strike, ceLtp)
+
+    // Store PE data
+    map.put(combinedStrikesMap, strike + numLevels * 2 + 1, strike)
+    map.put(combinedOpensMap, strike + numLevels * 2 + 1, peOpen)
+    map.put(combinedClosesMap, strike + numLevels * 2 + 1, peClose)
+    map.put(combinedVolumesMap, strike + numLevels * 2 + 1, peVolume)
+    map.put(isCEMap, strike + numLevels * 2 + 1, false)
+    map.put(combinedSymbolsMap, strike + numLevels * 2 + 1, peSymbol)
+    map.put(combinedPrHighsMap, strike + numLevels * 2 + 1, pePrhigh)
+    map.put(combinedPrLowsMap, strike + numLevels * 2 + 1, pePrLow)
+    map.put(combinedPdVolumesMap, strike + numLevels * 2 + 1, pePdVolume)
+    map.put(combinedLtpMap, strike + numLevels * 2 + 1, peLtp)
+
+var float highestCEStrike = na
+var float lowestPEStrike = na
+var float topCEStrike = na
+var float topPEStrike = na
+var float srStrikePrice = na
+var float newPEStrike = na
+var float newCEStrike = na
+// ==========================================
+// Table Creation with Alternative Sorting
+// ==========================================
+
+if (barstate.isrealtime or barstate.islast) and showTable
+    var table tbl = table.new(getTablePosition(tablePosition), 10, 50, bgcolor=color.new(color.gray, 90), border_width=1)
+    
+    // Extract data into arrays
+    var float[] strikes = array.new_float()
+    var float[] volumes = array.new_float()
+    var float[] opens = array.new_float()
+    var float[] closes = array.new_float()  
+    var string[] symbols = array.new_string()
+    var string[] cepe = array.new_string()
+    var float[] pdVolume = array.new_float()
+    var float[] ltp = array.new_float()
+    var float[] prevVolumes = array.new_float()  // New array for previous volumes
+
+    // Clear previous data
+    array.clear(strikes)
+    array.clear(volumes)
+    array.clear(opens)
+    array.clear(closes)  
+    array.clear(symbols)
+    array.clear(cepe)
+    array.clear(pdVolume)
+    array.clear(ltp)
+    array.clear(prevVolumes)  // Clear previous volumes array
+
+    for i = 0 to numLevels * 2
+        strike = strikePrice + (strikeInterval * (i - numLevels))
+        ceSymbol = map.get(CEsymbolsMap, strike)
+        peSymbol = map.get(PEsymbolsMap, strike)
+        
+        // CE Data
+        array.push(strikes, strike)
+        array.push(volumes, map.get(combinedVolumesMap, strike))
+        array.push(prevVolumes, nz(map.get(combinedPrevVolumesMap, strike), map.get(combinedVolumesMap, strike)))  // Store previous volume
+        array.push(opens, map.get(combinedOpensMap, strike))
+        array.push(closes, map.get(combinedClosesMap, strike))  // Add CE close price
+        array.push(symbols, ceSymbol)
+        array.push(cepe, "CE")
+        array.push(pdVolume, map.get(combinedPdVolumesMap, strike))
+        array.push(ltp, map.get(combinedLtpMap, strike))
+        // PE Data
+        array.push(strikes, strike)
+        array.push(volumes, map.get(combinedVolumesMap, strike + numLevels * 2 + 1))
+        array.push(prevVolumes, nz(map.get(combinedPrevVolumesMap, strike + numLevels * 2 + 1), map.get(combinedVolumesMap, strike + numLevels * 2 + 1)))  // Store previous volume
+        array.push(opens, map.get(combinedOpensMap, strike + numLevels * 2 + 1))
+        array.push(closes, map.get(combinedClosesMap, strike + numLevels * 2 + 1))  // Add PE close price
+        array.push(symbols, peSymbol)
+        array.push(cepe, "PE")
+        array.push(pdVolume, map.get(combinedPdVolumesMap, strike + numLevels * 2 + 1))
+        array.push(ltp, map.get(combinedLtpMap, strike + numLevels * 2 + 1))
+
+    // Manual bubble sort implementation for descending order
+    arraySize = array.size(volumes)
+    for i = 0 to arraySize - 2
+        for j = 0 to arraySize - i - 2
+            if array.get(volumes, j) < array.get(volumes, j + 1)
+                // Swap volumes
+                tempVolume = array.get(volumes, j)
+                array.set(volumes, j, array.get(volumes, j + 1))
+                array.set(volumes, j + 1, tempVolume)
+                
+                // Swap strikes
+                tempStrike = array.get(strikes, j)
+                array.set(strikes, j, array.get(strikes, j + 1))
+                array.set(strikes, j + 1, tempStrike)
+                
+                // Swap opens
+                tempOpen = array.get(opens, j)
+                array.set(opens, j, array.get(opens, j + 1))
+                array.set(opens, j + 1, tempOpen)
+                
+                // Swap closes
+                tempClose = array.get(closes, j)  // Swap close prices
+                array.set(closes, j, array.get(closes, j + 1))
+                array.set(closes, j + 1, tempClose)
+                
+                // Swap symbols
+                tempSymbol = array.get(symbols, j)
+                array.set(symbols, j, array.get(symbols, j + 1))
+                array.set(symbols, j + 1, tempSymbol)                
+                
+                // Swap CE/PE indicators
+                tempCePe = array.get(cepe, j)
+                array.set(cepe, j, array.get(cepe, j + 1))
+                array.set(cepe, j + 1, tempCePe)
+                
+                // Swap pdVolume
+                tempPdVolume = array.get(pdVolume, j)
+                array.set(pdVolume, j, array.get(pdVolume, j + 1))
+                array.set(pdVolume, j + 1, tempPdVolume)
+                
+                // Swap ltp
+                tempLtp = array.get(ltp, j)
+                array.set(ltp, j, array.get(ltp, j + 1))
+                array.set(ltp, j + 1, tempLtp)
+
+                // Swap previous volumes
+                tempPrevVolume = array.get(prevVolumes, j)
+                array.set(prevVolumes, j, array.get(prevVolumes, j + 1))
+                array.set(prevVolumes, j + 1, tempPrevVolume)
+
+    // Find top CE and PE strike prices    
+    for i = 0 to arraySize - 1
+        if array.get(cepe, i) == "CE" and na(topCEStrike)
+            topCEStrike := array.get(strikes, i)
+        if array.get(cepe, i) == "PE" and na(topPEStrike)
+            topPEStrike := array.get(strikes, i)
+        if not na(topCEStrike) and not na(topPEStrike)
+            break   
+
+    // Find the highest CE and lowest PE strike prices from the top 6 entries    
+    for i = 0 to 5
+        if i >= arraySize
+            break
+        if array.get(cepe, i) == "CE" and (na(highestCEStrike) or array.get(strikes, i) > highestCEStrike)
+            highestCEStrike := array.get(strikes, i)
+        if array.get(cepe, i) == "PE" and (na(lowestPEStrike) or array.get(strikes, i) < lowestPEStrike)
+            lowestPEStrike := array.get(strikes, i)     
+
+    // ==========================================
+    // Calculate the Average of the Strike Prices
+    // ==========================================
+    
+    if (barstate.isrealtime or barstate.islast) and not na(topCEStrike) and not na(topPEStrike)
+        srStrikePrice := (topCEStrike + topPEStrike) / 2
+
+        // Check if srStrikePrice obeys the strikeInterval
+        if srStrikePrice % strikeInterval != 0
+            // Iterate until we find a valid average
+            for i = 0 to arraySize - 1
+                idx = array.get(strikes, i)
+                if array.get(cepe, i) == "CE"
+                    // If current index is CE, find the next PE strike
+                    for j = i + 1 to arraySize - 1
+                        jdx = array.get(strikes, j)
+                        if array.get(cepe, j) == "PE"
+                            newPEStrike := array.get(strikes, j)
+                            srStrikePrice := (topCEStrike + newPEStrike) / 2
+                            if srStrikePrice % strikeInterval == 0
+                                break
+                else
+                    // If current index is PE, find the next CE strike
+                    for j = i + 1 to arraySize - 1
+                        jdx = array.get(strikes, j)
+                        if array.get(cepe, j) == "CE"
+                            newCEStrike := array.get(strikes, j)
+                            srStrikePrice := (topPEStrike + newCEStrike) / 2
+                            if srStrikePrice % strikeInterval == 0
+                                break
+                
+                // Break the outer loop if a valid average is found
+                if srStrikePrice % strikeInterval == 0
+                    break
+
+    // Add headers
+    table.cell(tbl, 0, 0, "1stCE: " + str.tostring(topCEStrike), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 1, 0, "1stPE: " + str.tostring(topPEStrike), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 2, 0, "High: " + str.tostring(highestCEStrike), text_size=getTableFontSize(tableFontSize), text_color=color.black)    
+    table.cell(tbl, 3, 0, "Low: " + str.tostring(lowestPEStrike), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 4, 0, "Avg: " + str.tostring(srStrikePrice), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 5, 0, "", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for Close
+    table.cell(tbl, 6, 0, "", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for PD Volume
+    table.cell(tbl, 7, 0, "", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for LTP
+    table.cell(tbl, 8, 0, "", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 9, 0, "", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for dis%
+                
+    // Add headers
+    table.cell(tbl, 0, 1, "Rank", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 1, 1, "Strike Price", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 2, 1, "SYM", text_size=getTableFontSize(tableFontSize), text_color=color.black)    
+    table.cell(tbl, 3, 1, "Volume", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 4, 1, "Open", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 5, 1, "Close", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for Close
+    table.cell(tbl, 6, 1, "PD Volume", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for PD Volume
+    table.cell(tbl, 7, 1, "LTP", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for LTP
+    table.cell(tbl, 8, 1, "Volume %", text_size=getTableFontSize(tableFontSize), text_color=color.black)
+    table.cell(tbl, 9, 1, "dis%", text_size=getTableFontSize(tableFontSize), text_color=color.black)  // New header for dis%
+
+    // Populate the table with sorted data
+    for i = 0 to arraySize - 1
+        if i >= maxTableRows
+            break
+
+        currentVolume = array.get(volumes, i)
+        previousVolume = array.get(prevVolumes, i)
+        volumePercentage = previousVolume != 0 ? ((currentVolume - previousVolume) / previousVolume) * 100 : na
+
+        // Calculate dis%
+        pdVolumeValue = array.get(pdVolume, i)
+        disPercentage = pdVolumeValue != 0 ? ((currentVolume - pdVolumeValue) / pdVolumeValue) * 100 : na
+        
+        table.cell(tbl, 0, i + 2, str.tostring(i + 1), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Serial number
+        table.cell(tbl, 1, i + 2, str.tostring(array.get(strikes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 2, i + 2, array.get(cepe, i), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 3, i + 2, str.tostring(array.get(volumes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 4, i + 2, str.tostring(array.get(opens, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 5, i + 2, str.tostring(array.get(closes, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Display Close prices
+        table.cell(tbl, 6, i + 2, str.tostring(array.get(pdVolume, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Display PD Volume
+        table.cell(tbl, 7, i + 2, str.tostring(array.get(ltp, i)), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Display LTP
+        table.cell(tbl, 8, i + 2, str.tostring(volumePercentage,format.percent), text_size=getTableFontSize(tableFontSize), text_color=color.black)
+        table.cell(tbl, 9, i + 2, str.tostring(disPercentage,format.percent), text_size=getTableFontSize(tableFontSize), text_color=color.black)  // Display dis%
+
+    // Update previous volumes for the next calculation
+    for i = 0 to arraySize - 1
+        strike = array.get(strikes, i)
+        map.put(combinedPrevVolumesMap, strike, array.get(volumes, i))

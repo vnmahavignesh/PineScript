@@ -1,0 +1,68 @@
+//@version=6
+indicator("NSE F&O Options Analyzer", overlay=true)
+
+// [Previous inputs and functions remain the same until the ATM calculation...]
+
+// Variables to store the average values
+var float avgCloseATM = na
+var float avgCloseITM = na
+var float avgCloseOTM = na
+
+// Calculate ATM average using live prices
+if barstate.islast
+    targetIndex = -1
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice
+            targetIndex := i
+            break
+    
+    if targetIndex != -1
+        ceIndex = targetIndex < numLevels * 2 + 1 ? targetIndex : targetIndex - (numLevels * 2 + 1)
+        peIndex = targetIndex < numLevels * 2 + 1 ? targetIndex + (numLevels * 2 + 1) : targetIndex
+        
+        ceLive = array.get(combinedLivePrices, ceIndex)
+        peLive = array.get(combinedLivePrices, peIndex)
+        
+        if not na(ceLive) and not na(peLive)
+            avgCloseATM := (ceLive + peLive)/2
+
+// Calculate ITM average using live prices
+if barstate.islast
+    ceBelow2ndLevelIndex = -1
+    peAbove2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and array.get(isCE, i)
+            ceBelow2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and not array.get(isCE, i)
+            peAbove2ndLevelIndex := i
+    
+    if ceBelow2ndLevelIndex != -1 and peAbove2ndLevelIndex != -1
+        ceLiveBelow2ndLevel = array.get(combinedLivePrices, ceBelow2ndLevelIndex)
+        peLiveAbove2ndLevel = array.get(combinedLivePrices, peAbove2ndLevelIndex)
+        
+        if not na(ceLiveBelow2ndLevel) and not na(peLiveAbove2ndLevel)
+            avgCloseITM := (ceLiveBelow2ndLevel + peLiveAbove2ndLevel)/2
+
+// Calculate OTM average using live prices
+if barstate.islast
+    ceAbove2ndLevelIndex = -1
+    peBelow2ndLevelIndex = -1
+    
+    for i = 0 to array.size(combinedStrikes) - 1
+        if array.get(combinedStrikes, i) == strikePrice + 2 * strikeInterval and array.get(isCE, i)
+            ceAbove2ndLevelIndex := i
+        if array.get(combinedStrikes, i) == strikePrice - 2 * strikeInterval and not array.get(isCE, i)
+            peBelow2ndLevelIndex := i
+    
+    if ceAbove2ndLevelIndex != -1 and peBelow2ndLevelIndex != -1
+        ceLiveAbove2ndLevel = array.get(combinedLivePrices, ceAbove2ndLevelIndex)
+        peLiveBelow2ndLevel = array.get(combinedLivePrices, peBelow2ndLevelIndex)
+        
+        if not na(ceLiveAbove2ndLevel) and not na(peLiveBelow2ndLevel)
+            avgCloseOTM := (ceLiveAbove2ndLevel + peLiveBelow2ndLevel)/2
+
+// Plot the average values
+plot(avgCloseATM, title="ATM Average", color=color.olive, linewidth=2, style=plot.style_line)
+plot(avgCloseITM, title="ITM Average", color=color.purple, linewidth=2, style=plot.style_line)
+plot(avgCloseOTM, title="OTM Average", color=color.orange, linewidth=2, style=plot.style_line)
